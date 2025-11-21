@@ -51,6 +51,9 @@ logs/
 *.sqlite
 *.sqlite3
 
+# SQL files
+*.sql
+
 # Cookies and session files
 *.pkl
 *_cookies.pkl
