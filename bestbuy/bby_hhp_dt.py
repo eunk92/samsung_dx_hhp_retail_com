@@ -292,57 +292,67 @@ class BestBuyDetailCrawler(BaseCrawler):
             specs_button_xpath = self.xpaths.get('specs_button', {}).get('xpath')
             if specs_button_xpath:
                 try:
-                    # Specs 버튼 찾기 및 클릭
-                    specs_button = self.driver.find_element("xpath", specs_button_xpath)
-                    if specs_button:
-                        print(f"[INFO] Clicking specs button to open modal")
-                        specs_button.click()
+                    # Specs 버튼 찾기 (WebDriverWait 사용)
+                    print(f"[INFO] Waiting for specs button to be clickable")
+                    specs_button = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.XPATH, specs_button_xpath))
+                    )
 
-                        # 모달이 완전히 로드될 때까지 대기 (carrier/storage/color 중 하나라도 나타날 때까지)
-                        try:
-                            WebDriverWait(self.driver, 10).until(
-                                lambda driver: driver.find_elements(By.XPATH, self.xpaths.get('hhp_carrier', {}).get('xpath', '//dummy')) or
-                                               driver.find_elements(By.XPATH, self.xpaths.get('hhp_storage', {}).get('xpath', '//dummy')) or
-                                               driver.find_elements(By.XPATH, self.xpaths.get('hhp_color', {}).get('xpath', '//dummy'))
-                            )
-                            print(f"[INFO] Specs modal fully loaded")
-                        except Exception:
-                            print(f"[WARNING] Timeout waiting for specs modal, proceeding anyway...")
-                            time.sleep(2)
+                    # 버튼이 화면에 보이도록 스크롤
+                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", specs_button)
+                    time.sleep(0.5)  # 스크롤 완료 대기
 
-                        # 모달 HTML 파싱 (별도 변수 사용)
-                        modal_html = self.driver.page_source
-                        modal_tree = html.fromstring(modal_html)
+                    print(f"[INFO] Clicking specs button to open modal")
+                    specs_button.click()
 
-                        # 모달에서 스펙 추출
-                        hhp_carrier = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
-                        hhp_storage = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
-                        hhp_color = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_color', {}).get('xpath'))
+                    # 모달이 완전히 로드될 때까지 대기 (carrier/storage/color 중 하나라도 나타날 때까지)
+                    try:
+                        WebDriverWait(self.driver, 10).until(
+                            lambda driver: driver.find_elements(By.XPATH, self.xpaths.get('hhp_carrier', {}).get('xpath', '//dummy')) or
+                                           driver.find_elements(By.XPATH, self.xpaths.get('hhp_storage', {}).get('xpath', '//dummy')) or
+                                           driver.find_elements(By.XPATH, self.xpaths.get('hhp_color', {}).get('xpath', '//dummy'))
+                        )
+                        print(f"[INFO] Specs modal fully loaded")
+                    except Exception:
+                        print(f"[WARNING] Timeout waiting for specs modal, proceeding anyway...")
+                        time.sleep(2)
 
-                        print(f"[INFO] Extracted specs - Carrier: {hhp_carrier}, Storage: {hhp_storage}, Color: {hhp_color}")
+                    # 모달 HTML 파싱 (별도 변수 사용)
+                    modal_html = self.driver.page_source
+                    modal_tree = html.fromstring(modal_html)
 
-                        # 스펙 모달창 닫기 (ESC 키 또는 닫기 버튼)
+                    # 모달에서 스펙 추출
+                    hhp_carrier = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
+                    hhp_storage = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
+                    hhp_color = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_color', {}).get('xpath'))
+
+                    print(f"[INFO] Extracted specs - Carrier: {hhp_carrier}, Storage: {hhp_storage}, Color: {hhp_color}")
+
+                    # 스펙 모달창 닫기 (닫기 버튼 클릭)
+                    try:
+                        # data-testid="brix-sheet-closeButton" 또는 aria-label="Close Sheet"로 닫기 버튼 찾기
+                        close_button_xpath = "//button[@data-testid='brix-sheet-closeButton' or @aria-label='Close Sheet']"
+                        close_button = WebDriverWait(self.driver, 5).until(
+                            EC.element_to_be_clickable((By.XPATH, close_button_xpath))
+                        )
+                        close_button.click()
+                        time.sleep(1)  # 모달이 닫힐 때까지 짧은 대기
+                        print(f"[INFO] Closed specs modal")
+                    except Exception as close_error:
+                        print(f"[WARNING] Failed to close specs modal: {close_error}")
+                        # 닫기 버튼 클릭 실패 시 ESC 키 시도
                         try:
                             from selenium.webdriver.common.keys import Keys
                             self.driver.find_element("tag name", "body").send_keys(Keys.ESCAPE)
-                            time.sleep(1)  # 모달이 닫힐 때까지 짧은 대기
-                            print(f"[INFO] Closed specs modal")
-                        except Exception as close_error:
-                            print(f"[WARNING] Failed to close specs modal with ESC key: {close_error}")
-                            # ESC 키가 안 되면 닫기 버튼 찾아서 클릭 시도
-                            try:
-                                close_button = self.driver.find_element("xpath", "//button[contains(@class, 'close') or contains(@aria-label, 'Close')]")
-                                close_button.click()
-                                time.sleep(1)
-                                print(f"[INFO] Closed specs modal using close button")
-                            except Exception:
-                                print(f"[WARNING] Could not close modal, proceeding anyway...")
+                            time.sleep(1)
+                            print(f"[INFO] Closed specs modal using ESC key")
+                        except Exception:
+                            print(f"[WARNING] Could not close modal, proceeding anyway...")
 
                 except Exception as e:
                     print(f"[WARNING] Failed to click specs button or extract specs: {e}")
 
             # 리뷰 데이터 추출: "See All Customer Reviews" 버튼 클릭 후 추출
-            # 스펙 모달창 열리기 전에 버튼 경로 저장
             detailed_review_content = None
             reviews_button_xpath = self.xpaths.get('reviews_button', {}).get('xpath')
             if reviews_button_xpath:
