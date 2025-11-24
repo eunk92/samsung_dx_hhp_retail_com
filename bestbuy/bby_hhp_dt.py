@@ -13,6 +13,9 @@ import time
 import traceback
 from datetime import datetime
 from lxml import html
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 
 # 공통 환경 설정 (작업 디렉토리, 한글 출력, 경로 설정)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -150,21 +153,8 @@ class BestBuyDetailCrawler(BaseCrawler):
     def extract_item_from_url(self, product_url):
         """
         BestBuy product_url에서 item (SKU ID) 추출
-
-        SQL 쿼리 로직:
-        reverse(split_part(reverse(regexp_replace(product_url, '/sku/[0-9]+(/openbox\?.*)?$', '')), '/', 1))
-
-        예시:
-        - https://www.bestbuy.com/site/apple-iphone-15-pro-128gb/6487404.p?skuId=6487404
-          → 6487404
-        - https://www.bestbuy.com/site/samsung-galaxy-s24/6570300.p
-          → 6570300
-
-        Args:
-            product_url (str): 제품 URL
-
-        Returns:
-            str: 추출된 SKU ID 또는 None
+        Args: product_url (str): 제품 URL
+        Returns: str: 추출된 SKU ID 또는 None
         """
         import re
 
@@ -175,27 +165,22 @@ class BestBuyDetailCrawler(BaseCrawler):
             # Step 1: /sku/숫자 또는 /sku/숫자/openbox?... 패턴 제거
             cleaned_url = re.sub(r'/sku/\d+(/openbox\?.*)?$', '', product_url)
 
-            # Step 2: URL을 역순으로 뒤집기
-            reversed_url = cleaned_url[::-1]
+            # Step 2: 쿼리 파라미터 제거 (? 이후 제거)
+            cleaned_url = cleaned_url.split('?')[0]
 
-            # Step 3: '/'로 split하여 첫 번째 부분 추출
-            parts = reversed_url.split('/', 1)
+            # Step 3: 마지막 '/' 뒷부분 추출
+            parts = cleaned_url.split('/')
             if not parts:
                 return None
 
-            first_part_reversed = parts[0]
+            # 마지막 부분이 item
+            item = parts[-1]
 
-            # Step 4: 다시 역순으로 뒤집기
-            last_part = first_part_reversed[::-1]
+            # 빈 문자열이면 None 반환
+            if not item:
+                return None
 
-            # Step 5: 숫자만 추출 (예: "6487404.p" → "6487404")
-            # 패턴: 숫자로 시작하고, .p 등의 확장자가 있을 수 있음
-            match = re.match(r'(\d+)', last_part)
-            if match:
-                item = match.group(1)
-                return item
-
-            return None
+            return item
 
         except Exception as e:
             print(f"[WARNING] Failed to extract item from URL {product_url}: {e}")
@@ -204,9 +189,7 @@ class BestBuyDetailCrawler(BaseCrawler):
     def crawl_detail(self, product):
         """
         제품 상세 페이지 크롤링
-
         Args: product (dict): product_list에서 조회한 제품 정보
-
         Returns: dict: 결합된 제품 데이터 (product_list + Detail 필드)
         """
         try:
@@ -215,11 +198,21 @@ class BestBuyDetailCrawler(BaseCrawler):
                 print("[WARNING] Product URL is missing, skipping")
                 return product
 
-            print(f"[INFO] Crawling detail page: {product_url}")
-
             # 상세 페이지 로드
             self.driver.get(product_url)
-            time.sleep(30)
+
+            # 리뷰 수 요소가 나타날 때까지 대기 (최대 120초)
+            # 리뷰 수는 동적 로딩되므로 이것이 나타나면 페이지 완전 로드됨
+            try:
+                print("[INFO] Waiting for page to load (checking for review count element)...")
+                WebDriverWait(self.driver, 120).until(
+                    lambda driver: driver.find_elements(By.XPATH, "//aside[@class='col-sm-4 col-lg-3']//div[contains(@class, 'v-text-dark-gray') and contains(@class, 'text-center') and contains(text(), 'review')]")
+                )
+                print("[INFO] Page fully loaded - review section found")
+            except Exception as e:
+                print(f"[WARNING] Timeout waiting for review section (120s): {e}")
+                print("[INFO] Proceeding with data extraction anyway...")
+                time.sleep(5)  # fallback 대기
 
             # HTML 파싱
             page_html = self.driver.page_source
@@ -282,7 +275,7 @@ class BestBuyDetailCrawler(BaseCrawler):
 
                         # URL 추출
                         url_xpath = self.xpaths.get('similar_product_url', {}).get('xpath')
-                        url = container.xpath(url_xpath)[0] if url_xpath and container.xpath(url_xpath) else None
+                        similar_product_url = container.xpath(url_xpath)[0] if url_xpath and container.xpath(url_xpath) else None
 
                         # 유사 제품 데이터 저장
                         if name:  # 제품명이 있는 경우만
@@ -290,7 +283,7 @@ class BestBuyDetailCrawler(BaseCrawler):
                                 'name': name,
                                 'pros': pros_list,  # 리스트 그대로 저장
                                 'cons': cons_list,  # 리스트 그대로 저장
-                                'url': url
+                                'url': similar_product_url
                             })
                             similar_product_names.append(name)
 
@@ -332,10 +325,7 @@ class BestBuyDetailCrawler(BaseCrawler):
                         print(f"[WARNING] Review button not found on page")
                 except Exception as e:
                     print(f"[WARNING] Failed to click review button or extract reviews: {e}")
-            else:
-                print(f"[WARNING] reviews_button xpath not found, extracting reviews from current page")
-                # reviews_button xpath가 없으면 원래 페이지에서 추출
-                detailed_review_content = data_extractor.extract_reviews(tree, self.xpaths.get('detailed_review_content', {}).get('xpath'))
+ 
 
             # 결합된 데이터
             combined_data = product.copy()
@@ -414,7 +404,7 @@ class BestBuyDetailCrawler(BaseCrawler):
                     'HHP',
                     product.get('item'),
                     self.account_name,
-                    'detail',
+                    product.get('page_type'),
                     product.get('count_of_reviews'),
                     product.get('retailer_sku_name'),
                     product.get('product_url'),
@@ -449,16 +439,15 @@ class BestBuyDetailCrawler(BaseCrawler):
                 ))
                 saved_count += 1
 
+                # 제품 저장 후 바로 유사 제품 데이터를 bby_hhp_mst에 저장
+                similar_products_data = product.get('similar_products_data', [])
+                if similar_products_data:
+                    similar_saved = self._save_similar_products_to_mst(cursor, product, current_time)
+
             self.db_conn.commit()
             cursor.close()
 
             print(f"[SUCCESS] Saved {saved_count} products to hhp_retail_com")
-            for i, product in enumerate(products[:3], 1):
-                sku_name = product.get('retailer_sku_name', 'N/A')
-                item = product.get('item', 'N/A')
-                print(f"[{i}] {sku_name[:40]}... (Item: {item})")
-            if len(products) > 3:
-                print(f"... and {len(products) - 3} more products")
 
             return saved_count
 
@@ -468,9 +457,65 @@ class BestBuyDetailCrawler(BaseCrawler):
             self.db_conn.rollback()
             return 0
 
+    def _save_similar_products_to_mst(self, cursor, product, current_time):
+        """
+        bby_hhp_mst 테이블에 유사 제품 저장 (내부 헬퍼 메서드)
+
+        Args:
+            cursor: DB cursor 객체
+            product (dict): 제품 데이터
+            current_time (str): 현재 시간
+
+        Returns: int: 저장된 행 수
+        """
+        try:
+            insert_query = """
+                INSERT INTO bby_hhp_mst (
+                    account_name, retailer_sku_name, item,
+                    retailer_sku_name_similar, pros, cons,
+                    origin_product_url, product_url,
+                    calendar_week, crawl_strdatetime
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+            """
+
+            saved_count = 0
+            similar_products_data = product.get('similar_products_data', [])
+
+            # 각 유사 제품을 별도 행으로 저장
+            for similar_product in similar_products_data:
+                # Pros/Cons 리스트를 ||| 구분자로 연결
+                pros_list = similar_product.get('pros', [])
+                cons_list = similar_product.get('cons', [])
+
+                pros_str = '|||'.join(pros_list) if pros_list else None
+                cons_str = '|||'.join(cons_list) if cons_list else None
+
+                cursor.execute(insert_query, (
+                    self.account_name,
+                    product.get('retailer_sku_name'),  # 원본 제품명
+                    product.get('item'),                # 원본 제품 item
+                    similar_product.get('name'),        # 유사 제품명
+                    pros_str,                           # Pros (||| 구분자)
+                    cons_str,                           # Cons (||| 구분자)
+                    product.get('product_url'),         # 원본 제품 URL
+                    similar_product.get('url'),         # 유사 제품 URL
+                    product.get('calendar_week'),
+                    current_time
+                ))
+                saved_count += 1
+
+            return saved_count
+
+        except Exception as e:
+            print(f"[ERROR] Failed to save similar products to bby_hhp_mst: {e}")
+            traceback.print_exc()
+            return 0
+
     def save_to_mst(self, products):
         """
-        bby_hhp_mst 테이블에 저장 (Similar Products, Pros/Cons 비교 데이터)
+        bby_hhp_mst 테이블에 저장 (Similar Products, Pros/Cons 비교 데이터) - DEPRECATED
 
         각 유사 제품을 별도 행으로 저장:
         - retailer_sku_name: 원본 제품명
@@ -577,13 +622,9 @@ class BestBuyDetailCrawler(BaseCrawler):
 
                 combined_data = self.crawl_detail(product)
 
-                # 1개 제품마다 즉시 DB에 저장
+                # 1개 제품마다 즉시 DB에 저장 (유사 제품도 함께 저장됨)
                 saved_count = self.save_to_retail_com([combined_data])
                 total_saved += saved_count
-
-                # bby_hhp_mst에 Similar Products 데이터 저장 (있을 경우에만)
-                if combined_data.get('similar_products_data'):
-                    self.save_to_mst([combined_data])
 
                 # 페이지 간 대기
                 time.sleep(5)
