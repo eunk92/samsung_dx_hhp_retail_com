@@ -3,7 +3,7 @@ BestBuy Detail 페이지 크롤러
 - 통합 크롤러에서만 실행 가능 (batch_id 필수)
 - product_list 테이블에서 해당 batch_id의 제품 URL 조회
 - 각 제품 상세 페이지에서 리뷰, 별점, 스펙 등 추출
-- Main/BSR/Promotion에서 수집한 모든 제품 처리
+- Main/BSR/Trend에서 수집한 모든 제품 처리
 - hhp_retail_com 및 bby_hhp_mst 테이블에 저장
 """
 
@@ -91,6 +91,7 @@ class BestBuyDetailCrawler(BaseCrawler):
             # product_list에서 hhp_retail_com으로 매핑할 필드 조회
             query = """
                 SELECT 
+                    page_type,
                     retailer_sku_name,
                     final_sku_price,
                     savings,
@@ -118,27 +119,27 @@ class BestBuyDetailCrawler(BaseCrawler):
 
             cursor.close()
 
-            # 딕셔너리 변환
+            # 딕셔너리 변환 (SELECT 컬럼 순서와 일치)
             product_list = []
             for row in rows:
                 product = {
                     'account_name': self.account_name,
-                    'page_type': None,  # Detail에서 결정
-                    'retailer_sku_name': row[0],
-                    'final_sku_price': row[1],
-                    'savings': row[2],
-                    'original_sku_price': row[3],
-                    'offer': row[4],
-                    'pick_up_availability': row[5],
-                    'shipping_availability': row[6],
-                    'delivery_availability': row[7],
-                    'sku_status': row[8],
-                    'promotion_type': row[9],
-                    'main_rank': row[10],
-                    'bsr_rank': row[11],
-                    'promotion_rank': row[12],
-                    'product_url': row[13],
-                    'calendar_week': row[14]
+                    'page_type': row[0],              # page_type
+                    'retailer_sku_name': row[1],      # retailer_sku_name
+                    'final_sku_price': row[2],        # final_sku_price
+                    'savings': row[3],                # savings
+                    'original_sku_price': row[4],     # comparable_pricing as original_sku_price
+                    'offer': row[5],                  # offer
+                    'pick_up_availability': row[6],   # pick_up_availability
+                    'shipping_availability': row[7],  # shipping_availability
+                    'delivery_availability': row[8],  # delivery_availability
+                    'sku_status': row[9],             # sku_status
+                    'promotion_type': row[10],        # promotion_type
+                    'main_rank': row[11],             # main_rank
+                    'bsr_rank': row[12],              # bsr_rank
+                    'trend_rank': row[13],            # trend_rank
+                    'product_url': row[14],           # product_url
+                    'calendar_week': row[15]          # calendar_week
                 }
                 product_list.append(product)
 
@@ -235,19 +236,12 @@ class BestBuyDetailCrawler(BaseCrawler):
                 self.account_name
             )
 
-            sku_popularity = self.extract_with_fallback(tree, self.xpaths.get('sku_popularity', {}).get('xpath'))
-            discount_type = self.extract_with_fallback(tree, self.xpaths.get('discount_type', {}).get('xpath'))
-            bundle = self.extract_with_fallback(tree, self.xpaths.get('bundle', {}).get('xpath'))
-            inventory_status = self.extract_with_fallback(tree, self.xpaths.get('inventory_status', {}).get('xpath'))
-            retailer_membership_discounts = self.extract_with_fallback(tree, self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
-            hhp_storage = self.extract_with_fallback(tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
-            hhp_color = self.extract_with_fallback(tree, self.xpaths.get('hhp_color', {}).get('xpath'))
-            hhp_carrier = self.extract_with_fallback(tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
+            # 기타 필드 추출
+            trade_in = self.extract_with_fallback(tree, self.xpaths.get('trade_in', {}).get('xpath'))
             top_mentions = self.extract_with_fallback(tree, self.xpaths.get('top_mentions', {}).get('xpath'))
-            summarized_review_content = self.extract_with_fallback(tree, self.xpaths.get('summarized_review_content', {}).get('xpath'))
+            recommendation_intent = self.extract_with_fallback(tree, self.xpaths.get('recommendation_intent', {}).get('xpath'))
 
-            # Compare Similar Products 섹션 추출
-            # XPath로 각 유사 제품 컨테이너 추출
+            # Compare Similar Products 섹션 추출 (Specs 모달 열기 전에 먼저 추출)
             similar_products_container_xpath = self.xpaths.get('similar_products_container', {}).get('xpath')
 
             similar_products_data = []  # [{name, pros, cons, url}, ...]
@@ -277,8 +271,8 @@ class BestBuyDetailCrawler(BaseCrawler):
                         url_xpath = self.xpaths.get('similar_product_url', {}).get('xpath')
                         similar_product_url = container.xpath(url_xpath)[0] if url_xpath and container.xpath(url_xpath) else None
 
-                        # 유사 제품 데이터 저장
-                        if name:  # 제품명이 있는 경우만
+                        # 유사 제품 데이터 저장 (제품명이 있는 경우만)
+                        if name:
                             similar_products_data.append({
                                 'name': name,
                                 'pros': pros_list,  # 리스트 그대로 저장
@@ -290,10 +284,67 @@ class BestBuyDetailCrawler(BaseCrawler):
                     # 모든 유사 제품명을 ||| 구분자로 연결
                     retailer_sku_name_similar = '|||'.join(similar_product_names) if similar_product_names else None
 
+            # HHP 스펙 추출: specs_button 클릭 후 모달에서 추출
+            hhp_carrier = None
+            hhp_storage = None
+            hhp_color = None
+
+            specs_button_xpath = self.xpaths.get('specs_button', {}).get('xpath')
+            if specs_button_xpath:
+                try:
+                    # Specs 버튼 찾기 및 클릭
+                    specs_button = self.driver.find_element("xpath", specs_button_xpath)
+                    if specs_button:
+                        print(f"[INFO] Clicking specs button to open modal")
+                        specs_button.click()
+
+                        # 모달이 완전히 로드될 때까지 대기 (carrier/storage/color 중 하나라도 나타날 때까지)
+                        try:
+                            WebDriverWait(self.driver, 10).until(
+                                lambda driver: driver.find_elements(By.XPATH, self.xpaths.get('hhp_carrier', {}).get('xpath', '//dummy')) or
+                                               driver.find_elements(By.XPATH, self.xpaths.get('hhp_storage', {}).get('xpath', '//dummy')) or
+                                               driver.find_elements(By.XPATH, self.xpaths.get('hhp_color', {}).get('xpath', '//dummy'))
+                            )
+                            print(f"[INFO] Specs modal fully loaded")
+                        except Exception:
+                            print(f"[WARNING] Timeout waiting for specs modal, proceeding anyway...")
+                            time.sleep(2)
+
+                        # 모달 HTML 파싱 (별도 변수 사용)
+                        modal_html = self.driver.page_source
+                        modal_tree = html.fromstring(modal_html)
+
+                        # 모달에서 스펙 추출
+                        hhp_carrier = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
+                        hhp_storage = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
+                        hhp_color = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_color', {}).get('xpath'))
+
+                        print(f"[INFO] Extracted specs - Carrier: {hhp_carrier}, Storage: {hhp_storage}, Color: {hhp_color}")
+
+                        # 스펙 모달창 닫기 (ESC 키 또는 닫기 버튼)
+                        try:
+                            from selenium.webdriver.common.keys import Keys
+                            self.driver.find_element("tag name", "body").send_keys(Keys.ESCAPE)
+                            time.sleep(1)  # 모달이 닫힐 때까지 짧은 대기
+                            print(f"[INFO] Closed specs modal")
+                        except Exception as close_error:
+                            print(f"[WARNING] Failed to close specs modal with ESC key: {close_error}")
+                            # ESC 키가 안 되면 닫기 버튼 찾아서 클릭 시도
+                            try:
+                                close_button = self.driver.find_element("xpath", "//button[contains(@class, 'close') or contains(@aria-label, 'Close')]")
+                                close_button.click()
+                                time.sleep(1)
+                                print(f"[INFO] Closed specs modal using close button")
+                            except Exception:
+                                print(f"[WARNING] Could not close modal, proceeding anyway...")
+
+                except Exception as e:
+                    print(f"[WARNING] Failed to click specs button or extract specs: {e}")
+
             # 리뷰 데이터 추출: "See All Customer Reviews" 버튼 클릭 후 추출
+            # 스펙 모달창 열리기 전에 버튼 경로 저장
             detailed_review_content = None
             reviews_button_xpath = self.xpaths.get('reviews_button', {}).get('xpath')
-
             if reviews_button_xpath:
                 try:
                     # "See All Customer Reviews" 버튼 찾기 및 클릭
@@ -301,15 +352,24 @@ class BestBuyDetailCrawler(BaseCrawler):
                     if review_button:
                         print(f"[INFO] Clicking 'See All Customer Reviews' button")
                         review_button.click()
-                        time.sleep(30)  # 페이지 로드 대기
 
-                        # 새 페이지의 HTML 파싱
-                        page_html = self.driver.page_source
-                        tree = html.fromstring(page_html)
-
-                        # 리뷰 본문 추출 (최대 20개)
+                        # 리뷰 페이지가 완전히 로드될 때까지 대기
                         detailed_review_xpath = self.xpaths.get('detailed_review_content', {}).get('xpath')
                         if detailed_review_xpath:
+                            try:
+                                WebDriverWait(self.driver, 30).until(
+                                    lambda driver: driver.find_elements(By.XPATH, detailed_review_xpath)
+                                )
+                                print(f"[INFO] Review page fully loaded")
+                            except Exception:
+                                print(f"[WARNING] Timeout waiting for reviews page, proceeding anyway...")
+                                time.sleep(5)
+
+                            # 새 페이지의 HTML 파싱
+                            page_html = self.driver.page_source
+                            tree = html.fromstring(page_html)
+
+                            # 리뷰 본문 추출 (최대 20개)
                             reviews_list = tree.xpath(detailed_review_xpath)
                             if reviews_list:
                                 # 최대 20개만 추출
@@ -321,8 +381,6 @@ class BestBuyDetailCrawler(BaseCrawler):
                                 print(f"[WARNING] No reviews found on review page")
                         else:
                             print(f"[WARNING] detailed_review_content xpath not found")
-                    else:
-                        print(f"[WARNING] Review button not found on page")
                 except Exception as e:
                     print(f"[WARNING] Failed to click review button or extract reviews: {e}")
  
@@ -334,16 +392,12 @@ class BestBuyDetailCrawler(BaseCrawler):
                 'count_of_reviews': count_of_reviews,
                 'star_rating': star_rating,
                 'count_of_star_ratings': count_of_star_ratings,
-                'sku_popularity': sku_popularity,
-                'discount_type': discount_type,
-                'bundle': bundle,
-                'inventory_status': inventory_status,
-                'retailer_membership_discounts': retailer_membership_discounts,
+                'trade_in': trade_in,
+                'recommendation_intent': recommendation_intent,
                 'hhp_storage': hhp_storage,
                 'hhp_color': hhp_color,
                 'hhp_carrier': hhp_carrier,
                 'detailed_review_content': detailed_review_content,
-                'summarized_review_content': summarized_review_content,
                 'top_mentions': top_mentions,
                 'retailer_sku_name_similar': retailer_sku_name_similar,
                 'similar_products_data': similar_products_data  # 각 유사 제품 객체 리스트
@@ -381,18 +435,18 @@ class BestBuyDetailCrawler(BaseCrawler):
                     offer, bundle,
                     pick_up_availability, shipping_availability, delivery_availability,
                     inventory_status, sku_status,
-                    retailer_membership_discounts,
+                    retailer_membership_discounts, trade_in, recommendation_intent,
                     hhp_storage, hhp_color, hhp_carrier,
                     detailed_review_content, summarized_review_content, top_mentions,
                     retailer_sku_name_similar,
-                    main_rank, bsr_rank, promotion_rank,
+                    main_rank, bsr_rank, trend_rank,
                     promotion_type,
-                    calendar_week, crawl_strdatetime
+                    calendar_week, crawl_strdatetime, batch_id
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """
 
@@ -423,6 +477,8 @@ class BestBuyDetailCrawler(BaseCrawler):
                     product.get('inventory_status'),
                     product.get('sku_status'),
                     product.get('retailer_membership_discounts'),
+                    product.get('trade_in'),
+                    product.get('recommendation_intent'),
                     product.get('hhp_storage'),
                     product.get('hhp_color'),
                     product.get('hhp_carrier'),
@@ -432,10 +488,11 @@ class BestBuyDetailCrawler(BaseCrawler):
                     product.get('retailer_sku_name_similar'),
                     product.get('main_rank'),
                     product.get('bsr_rank'),
-                    product.get('promotion_rank'),
+                    product.get('trend_rank'),
                     product.get('promotion_type'),
                     product.get('calendar_week'),
-                    current_time
+                    current_time,
+                    self.batch_id
                 ))
                 saved_count += 1
 
