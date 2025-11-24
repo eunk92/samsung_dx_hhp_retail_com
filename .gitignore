@@ -59,10 +59,13 @@ logs/
 *_cookies.pkl
 *_storage_state.json
 walmart_storage_state.json
+cookies/
+amazon/cookies/
 
 # Screenshots and debug files
 captcha_screen_*.png
 walmart_robot_page_*.html
+login_page_debug.html
 
 # CSV exports
 *.csv

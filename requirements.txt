@@ -1,0 +1,12 @@
+# Web Scraping
+selenium>=4.0.0
+lxml>=4.9.0
+
+# Database
+psycopg2-binary>=2.9.0
+
+# WebDriver Management
+webdriver-manager>=4.0.0
+
+# Utilities
+pytz>=2023.3
