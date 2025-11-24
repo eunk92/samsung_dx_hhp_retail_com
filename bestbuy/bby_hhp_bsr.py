@@ -44,7 +44,7 @@ class BestBuyBSRCrawler(BaseCrawler):
 
         # 테스트 설정
         self.test_page = 1
-        self.test_count = 2
+        self.test_count = 1
 
         # 운영 모드 설정
         self.max_products = 100  # 운영 모드 목표: 100개 제품 수집
@@ -57,7 +57,7 @@ class BestBuyBSRCrawler(BaseCrawler):
         """
         print("\n" + "="*60)
         print(f"[INFO] BestBuy BSR Crawler Initialization")
-        print(f"[INFO] Test Mode: {'ON (2 products from page 1)' if self.test_mode else 'OFF (2 pages)'}")
+        print(f"[INFO] Test Mode: {'ON (1 product from page 1)' if self.test_mode else 'OFF (2 pages)'}")
         print("="*60 + "\n")
 
         # 1. DB 연결

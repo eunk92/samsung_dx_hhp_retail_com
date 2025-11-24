@@ -2,7 +2,7 @@
 BestBuy 통합 크롤러 (테스트용)
 - Main → BSR → Trend → Detail 순차 실행
 - 동일한 batch_id로 전체 파이프라인 실행
-- 테스트 모드: Main(2개) + BSR(2개) + Trend(2개) + Detail(전체)
+- 테스트 모드: Main(1개) + BSR(1개) + Trend(1개) + Detail(전체)
 - 재시작 기능: --resume-from 옵션으로 특정 단계부터 재개 가능
 """
 
@@ -50,9 +50,9 @@ class BestBuyIntegratedCrawlerTest:
 
         실행 순서:
         0. 통합 크롤러에서 batch_id 생성 (또는 기존 batch_id 사용)
-        1. Main 크롤러 (테스트 모드: 1페이지 2개 제품)
-        2. BSR 크롤러 (테스트 모드: 1페이지 2개 제품)
-        3. Trend 크롤러 (테스트 모드: 1페이지 2개 제품)
+        1. Main 크롤러 (테스트 모드: 1페이지 1개 제품)
+        2. BSR 크롤러 (테스트 모드: 1페이지 1개 제품)
+        3. Trend 크롤러 (테스트 모드: 1페이지 1개 제품)
         4. Detail 크롤러 (Main + BSR + Trend에서 수집한 모든 제품)
 
         Returns: bool: 성공 시 True, 실패 시 False
@@ -73,7 +73,7 @@ class BestBuyIntegratedCrawlerTest:
         print("="*80)
         print(f"[INFO] Start Time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"[INFO] Batch ID: {self.batch_id}")
-        print(f"[INFO] Test Mode: Main(2) + BSR(2) + Trend(2) + Detail(all)")
+        print(f"[INFO] Test Mode: Main(1) + BSR(1) + Trend(1) + Detail(all)")
         print("="*80 + "\n")
 
         try:

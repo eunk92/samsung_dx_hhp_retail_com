@@ -44,7 +44,7 @@ class BestBuyTrendCrawler(BaseCrawler):
 
         # 테스트 설정
         self.test_page = 1
-        self.test_count = 2
+        self.test_count = 1
 
     def initialize(self):
         """
@@ -54,7 +54,7 @@ class BestBuyTrendCrawler(BaseCrawler):
         """
         print("\n" + "="*60)
         print(f"[INFO] BestBuy Trending Deals Crawler Initialization")
-        print(f"[INFO] Test Mode: {'ON (2 products)' if self.test_mode else 'OFF (all products)'}")
+        print(f"[INFO] Test Mode: {'ON (1 product)' if self.test_mode else 'OFF (all products)'}")
         print("="*60 + "\n")
 
         # 1. DB 연결
