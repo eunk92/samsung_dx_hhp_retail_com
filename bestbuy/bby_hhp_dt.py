@@ -202,27 +202,66 @@ class BestBuyDetailCrawler(BaseCrawler):
             # 상세 페이지 로드
             self.driver.get(product_url)
 
-            # 리뷰 섹션이 완전히 로드될 때까지 대기 (최대 120초)
-            # 별점, 리뷰 수, 별점별 개수가 모두 나타날 때까지 대기
+            # 동적 페이지 로드 완료 대기
             try:
-                print("[INFO] Waiting for page to load (checking for review section)...")
+                print("[INFO] Waiting for dynamic page to fully load...")
+
+                # 1단계: document.readyState가 'complete'가 될 때까지 대기
+                WebDriverWait(self.driver, 30).until(
+                    lambda driver: driver.execute_script("return document.readyState") == "complete"
+                )
+                print("[INFO] Document ready state: complete")
+
+                # 2단계: jQuery가 있다면 Ajax 요청 완료 대기
+                try:
+                    WebDriverWait(self.driver, 10).until(
+                        lambda driver: driver.execute_script("return typeof jQuery !== 'undefined' ? jQuery.active === 0 : true")
+                    )
+                    print("[INFO] jQuery Ajax requests completed")
+                except Exception:
+                    print("[INFO] jQuery not detected or Ajax check failed, continuing...")
+
+                # 3단계: 네트워크 활동이 안정될 때까지 대기 (DOM 변화 감지)
+                print("[INFO] Waiting for network activity to stabilize...")
+                stable_count = 0
+                last_html_length = 0
+
+                for _ in range(10):  # 최대 10번 체크 (10초)
+                    time.sleep(1)
+                    current_html_length = len(self.driver.page_source)
+
+                    if current_html_length == last_html_length:
+                        stable_count += 1
+                        if stable_count >= 3:  # 3초 동안 변화 없으면 안정된 것으로 판단
+                            print("[INFO] Page stabilized (no changes for 3 seconds)")
+                            break
+                    else:
+                        stable_count = 0
+
+                    last_html_length = current_html_length
+
+                # 4단계: 주요 요소들이 로드되었는지 확인
+                print("[INFO] Verifying key elements are loaded...")
                 star_rating_xpath = self.xpaths.get('star_rating', {}).get('xpath')
                 count_of_reviews_xpath = self.xpaths.get('count_of_reviews', {}).get('xpath')
                 count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
+                similar_products_container_xpath = self.xpaths.get('similar_products_container', {}).get('xpath')
 
-                WebDriverWait(self.driver, 120).until(
+                WebDriverWait(self.driver, 30).until(
                     lambda driver: (
                         (driver.find_elements(By.XPATH, star_rating_xpath) if star_rating_xpath else True) and
                         (driver.find_elements(By.XPATH, count_of_reviews_xpath) if count_of_reviews_xpath else True) and
-                        (driver.find_elements(By.XPATH, count_of_star_ratings_xpath) if count_of_star_ratings_xpath else True)
+                        (driver.find_elements(By.XPATH, count_of_star_ratings_xpath) if count_of_star_ratings_xpath else True) and
+                        (driver.find_elements(By.XPATH, similar_products_container_xpath) if similar_products_container_xpath else True)
                     )
                 )
-                print("[INFO] Page fully loaded - review section found")
-                time.sleep(2)  # 추가 대기 (DOM 안정화)
+                print("[INFO] All key elements verified and loaded")
+                time.sleep(1)  # 최종 안정화 대기
+
             except Exception as e:
-                print(f"[WARNING] Timeout waiting for review section (120s): {e}")
+                print(f"[WARNING] Dynamic page load detection failed: {e}")
                 print("[INFO] Proceeding with data extraction anyway...")
-                time.sleep(5)  # fallback 대기
+                time.sleep(3)  # fallback 대기
 
             # HTML 파싱
             page_html = self.driver.page_source
