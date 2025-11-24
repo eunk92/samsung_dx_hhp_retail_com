@@ -37,8 +37,17 @@ def setup_environment(script_file):
     # 2. Windows 콘솔 한글 출력 설정
     if sys.platform == 'win32':
         import io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+        # stdout/stderr가 아직 래핑되지 않았을 때만 래핑
+        if not isinstance(sys.stdout, io.TextIOWrapper) or sys.stdout.encoding != 'utf-8':
+            try:
+                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+            except (AttributeError, ValueError):
+                pass
+        if not isinstance(sys.stderr, io.TextIOWrapper) or sys.stderr.encoding != 'utf-8':
+            try:
+                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
+            except (AttributeError, ValueError):
+                pass
 
     # 3. 프로젝트 루트를 sys.path에 추가 (중복 방지)
     if project_root not in sys.path:
