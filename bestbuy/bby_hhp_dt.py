@@ -202,14 +202,23 @@ class BestBuyDetailCrawler(BaseCrawler):
             # 상세 페이지 로드
             self.driver.get(product_url)
 
-            # 리뷰 수 요소가 나타날 때까지 대기 (최대 120초)
-            # 리뷰 수는 동적 로딩되므로 이것이 나타나면 페이지 완전 로드됨
+            # 리뷰 섹션이 완전히 로드될 때까지 대기 (최대 120초)
+            # 별점, 리뷰 수, 별점별 개수가 모두 나타날 때까지 대기
             try:
-                print("[INFO] Waiting for page to load (checking for review count element)...")
+                print("[INFO] Waiting for page to load (checking for review section)...")
+                star_rating_xpath = self.xpaths.get('star_rating', {}).get('xpath')
+                count_of_reviews_xpath = self.xpaths.get('count_of_reviews', {}).get('xpath')
+                count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
+
                 WebDriverWait(self.driver, 120).until(
-                    lambda driver: driver.find_elements(By.XPATH, "//aside[@class='col-sm-4 col-lg-3']//div[contains(@class, 'v-text-dark-gray') and contains(@class, 'text-center') and contains(text(), 'review')]")
+                    lambda driver: (
+                        (driver.find_elements(By.XPATH, star_rating_xpath) if star_rating_xpath else True) and
+                        (driver.find_elements(By.XPATH, count_of_reviews_xpath) if count_of_reviews_xpath else True) and
+                        (driver.find_elements(By.XPATH, count_of_star_ratings_xpath) if count_of_star_ratings_xpath else True)
+                    )
                 )
                 print("[INFO] Page fully loaded - review section found")
+                time.sleep(2)  # 추가 대기 (DOM 안정화)
             except Exception as e:
                 print(f"[WARNING] Timeout waiting for review section (120s): {e}")
                 print("[INFO] Proceeding with data extraction anyway...")
@@ -292,15 +301,20 @@ class BestBuyDetailCrawler(BaseCrawler):
             specs_button_xpath = self.xpaths.get('specs_button', {}).get('xpath')
             if specs_button_xpath:
                 try:
+                    # 페이지 스크롤하여 Specs 버튼이 있는 영역으로 이동
+                    print(f"[INFO] Scrolling down to find specs button")
+                    self.driver.execute_script("window.scrollBy(0, 1000);")
+                    time.sleep(1)
+
                     # Specs 버튼 찾기 (WebDriverWait 사용)
                     print(f"[INFO] Waiting for specs button to be clickable")
                     specs_button = WebDriverWait(self.driver, 10).until(
                         EC.element_to_be_clickable((By.XPATH, specs_button_xpath))
                     )
 
-                    # 버튼이 화면에 보이도록 스크롤
+                    # 버튼이 화면에 보이도록 추가 스크롤
                     self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", specs_button)
-                    time.sleep(0.5)  # 스크롤 완료 대기
+                    time.sleep(1)  # 스크롤 완료 대기
 
                     print(f"[INFO] Clicking specs button to open modal")
                     specs_button.click()
@@ -357,40 +371,52 @@ class BestBuyDetailCrawler(BaseCrawler):
             reviews_button_xpath = self.xpaths.get('reviews_button', {}).get('xpath')
             if reviews_button_xpath:
                 try:
-                    # "See All Customer Reviews" 버튼 찾기 및 클릭
-                    review_button = self.driver.find_element("xpath", reviews_button_xpath)
-                    if review_button:
-                        print(f"[INFO] Clicking 'See All Customer Reviews' button")
-                        review_button.click()
+                    # 페이지 상단으로 스크롤 (리뷰 버튼은 보통 페이지 중간에 위치)
+                    print(f"[INFO] Scrolling to find review button")
+                    self.driver.execute_script("window.scrollTo(0, 500);")
+                    time.sleep(1)
 
-                        # 리뷰 페이지가 완전히 로드될 때까지 대기
-                        detailed_review_xpath = self.xpaths.get('detailed_review_content', {}).get('xpath')
-                        if detailed_review_xpath:
-                            try:
-                                WebDriverWait(self.driver, 30).until(
-                                    lambda driver: driver.find_elements(By.XPATH, detailed_review_xpath)
-                                )
-                                print(f"[INFO] Review page fully loaded")
-                            except Exception:
-                                print(f"[WARNING] Timeout waiting for reviews page, proceeding anyway...")
-                                time.sleep(5)
+                    # "See All Customer Reviews" 버튼 찾기 (WebDriverWait 사용)
+                    print(f"[INFO] Waiting for review button to be clickable")
+                    review_button = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.XPATH, reviews_button_xpath))
+                    )
 
-                            # 새 페이지의 HTML 파싱
-                            page_html = self.driver.page_source
-                            tree = html.fromstring(page_html)
+                    # 버튼이 화면에 보이도록 스크롤
+                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", review_button)
+                    time.sleep(1)
 
-                            # 리뷰 본문 추출 (최대 20개)
-                            reviews_list = tree.xpath(detailed_review_xpath)
-                            if reviews_list:
-                                # 최대 20개만 추출
-                                reviews_list = reviews_list[:20]
-                                # 구분자로 연결
-                                detailed_review_content = '|||'.join(reviews_list)
-                                print(f"[INFO] Extracted {len(reviews_list)} reviews")
-                            else:
-                                print(f"[WARNING] No reviews found on review page")
+                    print(f"[INFO] Clicking 'See All Customer Reviews' button")
+                    review_button.click()
+
+                    # 리뷰 페이지가 완전히 로드될 때까지 대기
+                    detailed_review_xpath = self.xpaths.get('detailed_review_content', {}).get('xpath')
+                    if detailed_review_xpath:
+                        try:
+                            WebDriverWait(self.driver, 30).until(
+                                lambda driver: driver.find_elements(By.XPATH, detailed_review_xpath)
+                            )
+                            print(f"[INFO] Review page fully loaded")
+                        except Exception:
+                            print(f"[WARNING] Timeout waiting for reviews page, proceeding anyway...")
+                            time.sleep(5)
+
+                        # 새 페이지의 HTML 파싱
+                        page_html = self.driver.page_source
+                        tree = html.fromstring(page_html)
+
+                        # 리뷰 본문 추출 (최대 20개)
+                        reviews_list = tree.xpath(detailed_review_xpath)
+                        if reviews_list:
+                            # 최대 20개만 추출
+                            reviews_list = reviews_list[:20]
+                            # 구분자로 연결
+                            detailed_review_content = '|||'.join(reviews_list)
+                            print(f"[INFO] Extracted {len(reviews_list)} reviews")
                         else:
-                            print(f"[WARNING] detailed_review_content xpath not found")
+                            print(f"[WARNING] No reviews found on review page")
+                    else:
+                        print(f"[WARNING] detailed_review_content xpath not found")
                 except Exception as e:
                     print(f"[WARNING] Failed to click review button or extract reviews: {e}")
  
