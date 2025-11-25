@@ -385,9 +385,15 @@ class BestBuyDetailCrawler(BaseCrawler):
                     print(f"[DEBUG] pros xpath: {pros_xpath}")
                     print(f"[DEBUG] cons xpath: {cons_xpath}")
 
-                    # 1단계: 전체 섹션에서 각 개별 제품 컨테이너 찾기 (similar_product XPath 사용)
-                    section_element = similar_section[0]
-                    individual_containers = section_element.xpath(similar_product_xpath) if similar_product_xpath else []
+                    # 1단계: 전체 섹션에서 각 개별 제품 컨테이너 찾기
+                    # similar_section은 여러 요소를 반환할 수 있으므로 전체 tree에서 다시 찾기
+                    if similar_product_xpath:
+                        # tree 전체에서 similar_products_container 하위의 individual products 찾기
+                        full_xpath = f"{similar_products_container_xpath}{similar_product_xpath}"
+                        individual_containers = tree.xpath(full_xpath)
+                        print(f"[DEBUG] Using combined XPath: {full_xpath}")
+                    else:
+                        individual_containers = []
 
                     print(f"[DEBUG] Found {len(individual_containers)} individual product containers")
 
