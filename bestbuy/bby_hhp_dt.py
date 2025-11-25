@@ -364,41 +364,47 @@ class BestBuyDetailCrawler(BaseCrawler):
                 else:
                     print(f"[WARNING] Could not find similar products section after scrolling entire page")
 
-                # 유사 제품 섹션 전체를 찾음 (4개 제품을 포함하는 컨테이너)
-                similar_section = tree.xpath(similar_products_container_xpath)
+                # 유사 제품 카드들을 바로 찾기 (similar_products_container가 이미 개별 카드들을 선택함)
+                try:
+                    # similar_products_container XPath로 개별 제품 카드 4개를 바로 찾음
+                    product_cards = tree.xpath(similar_products_container_xpath)
+                    print(f"[DEBUG] similar_products_container xpath: {similar_products_container_xpath}")
+                    print(f"[DEBUG] Found {len(product_cards)} product cards")
 
-                if similar_section:
-                    similar_product_names = []
-                    print(f"[DEBUG] Found similar products section")
+                    if product_cards:
+                        similar_product_names = []
 
-                    # XPath 미리 가져오기
-                    similar_product_xpath = self.xpaths.get('similar_product', {}).get('xpath')
-                    name_xpath = self.xpaths.get('similar_product_name', {}).get('xpath')
+                        # 제품명 XPath 가져오기
+                        name_xpath = self.xpaths.get('similar_product_name', {}).get('xpath')
+                        print(f"[DEBUG] similar_product_name xpath: {name_xpath}")
 
-                    print(f"[DEBUG] similar_product xpath: {similar_product_xpath}")
-                    print(f"[DEBUG] similar_product_name xpath: {name_xpath}")
+                        # 각 제품 카드에서 제품명만 추출
+                        for idx, card in enumerate(product_cards, 1):
+                            try:
+                                if name_xpath:
+                                    name_results = card.xpath(name_xpath)
+                                    if name_results:
+                                        name = name_results[0]
+                                        similar_product_names.append(name)
+                                        print(f"[DEBUG] Product {idx} name: {name}")
+                                    else:
+                                        print(f"[WARNING] Product {idx}: name xpath returned empty")
+                            except Exception as name_error:
+                                print(f"[WARNING] Failed to extract product {idx} name: {name_error}")
+                                continue
 
-                    # 전체 섹션에서 각 개별 제품 컨테이너 찾기
-                    if similar_product_xpath:
-                        full_xpath = f"{similar_products_container_xpath}{similar_product_xpath}"
-                        individual_containers = tree.xpath(full_xpath)
-                        print(f"[DEBUG] Found {len(individual_containers)} individual product containers")
+                        print(f"[INFO] Extracted {len(similar_product_names)} similar product names")
 
-                        # 각 제품 컨테이너에서 제품명만 추출
-                        for idx, container in enumerate(individual_containers, 1):
-                            if name_xpath:
-                                name_results = container.xpath(name_xpath)
-                                if name_results:
-                                    name = name_results[0]
-                                    similar_product_names.append(name)
-                                    print(f"[DEBUG] Product {idx} name: {name}")
-                                else:
-                                    print(f"[WARNING] Product {idx}: name xpath returned empty")
+                        # 모든 유사 제품명을 ||| 구분자로 연결
+                        retailer_sku_name_similar = '|||'.join(similar_product_names) if similar_product_names else None
+                    else:
+                        print(f"[INFO] No similar product cards found")
+                        retailer_sku_name_similar = None
 
-                    print(f"[INFO] Extracted {len(similar_product_names)} similar product names")
-
-                    # 모든 유사 제품명을 ||| 구분자로 연결
-                    retailer_sku_name_similar = '|||'.join(similar_product_names) if similar_product_names else None
+                except Exception as similar_error:
+                    print(f"[WARNING] Failed to extract similar products: {similar_error}")
+                    print(f"[INFO] Continuing with other data extraction...")
+                    retailer_sku_name_similar = None
 
             # ========== 3단계: 리뷰 섹션 데이터 추출 (HTML에서) ==========
             # HTML 다시 파싱 (스크롤 후 업데이트된 DOM)
