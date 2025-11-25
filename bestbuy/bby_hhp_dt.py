@@ -370,17 +370,38 @@ class BestBuyDetailCrawler(BaseCrawler):
 
                 if similar_product_containers:
                     similar_product_names = []
+                    print(f"[DEBUG] Found {len(similar_product_containers)} similar product containers")
 
                     # 1단계: 각 제품 컨테이너에서 제품명과 URL 추출
                     products_basic_info = []
-                    for container in similar_product_containers:
+
+                    # XPath 미리 가져오기
+                    name_xpath = self.xpaths.get('similar_product_name', {}).get('xpath')
+                    url_xpath = self.xpaths.get('similar_product_url', {}).get('xpath')
+
+                    print(f"[DEBUG] similar_product_name xpath: {name_xpath}")
+                    print(f"[DEBUG] similar_product_url xpath: {url_xpath}")
+
+                    for idx, container in enumerate(similar_product_containers, 1):
                         # 제품명 추출
-                        name_xpath = self.xpaths.get('similar_product_name', {}).get('xpath')
-                        name = container.xpath(name_xpath)[0] if name_xpath and container.xpath(name_xpath) else None
+                        name = None
+                        if name_xpath:
+                            name_results = container.xpath(name_xpath)
+                            if name_results:
+                                name = name_results[0]
+                                print(f"[DEBUG] Product {idx} name: {name}")
+                            else:
+                                print(f"[WARNING] Product {idx}: name xpath returned empty")
 
                         # URL 추출
-                        url_xpath = self.xpaths.get('similar_product_url', {}).get('xpath')
-                        similar_product_url = container.xpath(url_xpath)[0] if url_xpath and container.xpath(url_xpath) else None
+                        similar_product_url = None
+                        if url_xpath:
+                            url_results = container.xpath(url_xpath)
+                            if url_results:
+                                similar_product_url = url_results[0]
+                                print(f"[DEBUG] Product {idx} URL: {similar_product_url}")
+                            else:
+                                print(f"[WARNING] Product {idx}: URL xpath returned empty")
 
                         if name:
                             products_basic_info.append({
@@ -388,6 +409,8 @@ class BestBuyDetailCrawler(BaseCrawler):
                                 'url': similar_product_url
                             })
                             similar_product_names.append(name)
+                        else:
+                            print(f"[WARNING] Product {idx}: skipping due to missing name")
 
                     # 2단계: Pros/Cons 테이블에서 추출 (각 제품 위치에 맞춰)
                     # 데이터베이스에서 조회한 xpath 사용
