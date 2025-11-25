@@ -84,7 +84,7 @@ def extract_rating(text, account_name=None):
 
 def extract_review_count(text, account_name=None):
     """
-    리뷰 개수 텍스트에서 숫자 추출 (쉼표 포함, 소수점 제외)
+    리뷰 개수 텍스트에서 숫자 추출 (쉼표 제거, 소수점 제외)
 
     쓰임새:
     - 리뷰 개수, 판매량 등 정수 데이터 후처리
@@ -94,15 +94,19 @@ def extract_review_count(text, account_name=None):
         account_name (str, optional): 쇼핑몰 계정명 (None 반환 시 쇼핑몰별 텍스트 사용)
 
     Returns:
-        str: 리뷰 개수 또는 쇼핑몰별 리뷰 없음 텍스트
+        str: 리뷰 개수 (쉼표 제거된 숫자) 또는 쇼핑몰별 리뷰 없음 텍스트
 
     Examples:
-        - "3,572등급 글로벌 평점" → "3,572"
+        - "3,572등급 글로벌 평점" → "3572"
         - "1234 reviews" → "1234"
+        - "891 reviews" → "891"
         - None (with account_name="Amazon") → "No customer reviews"
     """
     result = extract_numeric_value(text, include_comma=True, include_decimal=False)
-    if result is None and account_name:
+    if result:
+        # 쉼표 제거하여 순수 숫자로 반환
+        result = result.replace(',', '')
+    elif account_name:
         return get_no_reviews_text(account_name)
     return result
 
@@ -230,7 +234,8 @@ def _extract_star_ratings_count_generic(tree, xpath, account_name):
         str: 별점 분포 문자열 또는 쇼핑몰별 리뷰 없음 텍스트
 
     Examples:
-        - "5star:2931,4star:286,3star:107,2star:36,1star:214"
+        - "5star:3712,4star:493,3star:254,2star:109,1star:478"
+        - Input: ["74% (3,712)", "10% (493)", ...] → "5star:3712,4star:493,..."
     """
     try:
         # XPath로 개수 텍스트 추출
@@ -249,8 +254,14 @@ def _extract_star_ratings_count_generic(tree, xpath, account_name):
             if i >= 5:  # 최대 5개만 처리
                 break
 
-            # 텍스트에서 숫자만 추출 (쉼표 포함)
-            count_str = extract_review_count(count_text.strip())
+            # Walmart 형식: "74% (3,712)" → "3,712" 추출
+            # 괄호 안의 숫자를 추출
+            match = re.search(r'\(([0-9,]+)\)', count_text.strip())
+            if match:
+                count_str = match.group(1)
+            else:
+                # 괄호가 없으면 기존 방식으로 추출
+                count_str = extract_review_count(count_text.strip())
 
             if count_str:
                 # 쉼표 제거하여 순수 숫자로 변환

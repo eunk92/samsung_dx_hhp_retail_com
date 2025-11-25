@@ -431,7 +431,7 @@ class WalmartBSRCrawler(BaseCrawler):
                     membership_discounts_raw = self.extract_with_fallback(item, self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
                     retailer_membership_discounts = f"{membership_discounts_raw} W+" if membership_discounts_raw else None
 
-                    # sku_status1, sku_status2 추출 및 결합
+                    # sku_status_1, sku_status_2 추출 및 결합
                     sku_status_1 = self.extract_with_fallback(item, self.xpaths.get('sku_status_1', {}).get('xpath'))
                     sku_status_2 = self.extract_with_fallback(item, self.xpaths.get('sku_status_2', {}).get('xpath'))
                     sku_status_parts = [s for s in [sku_status_1, sku_status_2] if s]
