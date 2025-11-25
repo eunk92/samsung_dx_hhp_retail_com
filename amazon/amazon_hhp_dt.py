@@ -516,12 +516,18 @@ class AmazonDetailCrawler(BaseCrawler):
                     print(f"[WARNING] Failed to extract hhp_color: {e}")
 
                 try:
-                    rank_1 = self.extract_with_fallback(tree, self.xpaths.get('rank_1', {}).get('xpath'))
+                    # rank_1: text_content()로 자식 태그 포함 전체 텍스트 추출
+                    rank1_elements = tree.xpath("//th[contains(text(), 'Best Sellers Rank')]/following-sibling::td//li[1]//span[@class='a-list-item']/span")
+                    if rank1_elements:
+                        rank_1 = rank1_elements[0].text_content().strip()
                 except Exception as e:
                     print(f"[WARNING] Failed to extract rank_1: {e}")
 
                 try:
-                    rank_2 = self.extract_with_fallback(tree, self.xpaths.get('rank_2', {}).get('xpath'))
+                    # rank_2: text_content()로 자식 태그 포함 전체 텍스트 추출
+                    rank2_elements = tree.xpath("//th[contains(text(), 'Best Sellers Rank')]/following-sibling::td//li[2]//span[@class='a-list-item']/span")
+                    if rank2_elements:
+                        rank_2 = rank2_elements[0].text_content().strip()
                 except Exception as e:
                     print(f"[WARNING] Failed to extract rank_2: {e}")
             else:
@@ -543,17 +549,19 @@ class AmazonDetailCrawler(BaseCrawler):
                     print(f"[WARNING] Failed to extract hhp_color (fallback): {e}")
 
                 try:
-                    fallback_rank1_xpath = "//th[contains(text(), 'Best Sellers Rank')]/following-sibling::td//li[1]//span/text()"
-                    rank_1 = self.extract_with_fallback(tree, fallback_rank1_xpath)
-                    if rank_1:
+                    # rank_1: text_content()로 자식 태그 포함 전체 텍스트 추출
+                    rank1_elements = tree.xpath("//th[contains(text(), 'Best Sellers Rank')]/following-sibling::td//li[1]//span[@class='a-list-item']/span")
+                    if rank1_elements:
+                        rank_1 = rank1_elements[0].text_content().strip()
                         print(f"[INFO] rank_1 extracted from fallback table: {rank_1}")
                 except Exception as e:
                     print(f"[WARNING] Failed to extract rank_1 (fallback): {e}")
 
                 try:
-                    fallback_rank2_xpath = "//th[contains(text(), 'Best Sellers Rank')]/following-sibling::td//li[2]//span/text()"
-                    rank_2 = self.extract_with_fallback(tree, fallback_rank2_xpath)
-                    if rank_2:
+                    # rank_2: text_content()로 자식 태그 포함 전체 텍스트 추출
+                    rank2_elements = tree.xpath("//th[contains(text(), 'Best Sellers Rank')]/following-sibling::td//li[2]//span[@class='a-list-item']/span")
+                    if rank2_elements:
+                        rank_2 = rank2_elements[0].text_content().strip()
                         print(f"[INFO] rank_2 extracted from fallback table: {rank_2}")
                 except Exception as e:
                     print(f"[WARNING] Failed to extract rank_2 (fallback): {e}")
