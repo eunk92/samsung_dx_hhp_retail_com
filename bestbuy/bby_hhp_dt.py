@@ -1,6 +1,7 @@
 """
 BestBuy Detail 페이지 크롤러
-- 통합 크롤러에서만 실행 가능 (batch_id 필수)
+- 개별 실행: test_mode=True (기본값), batch_id 입력
+- 통합 크롤러: test_mode 및 batch_id를 파라미터로 전달
 - product_list 테이블에서 해당 batch_id의 제품 URL 조회
 - 각 제품 상세 페이지에서 리뷰, 별점, 스펙 등 추출
 - Main/BSR/Trend에서 수집한 모든 제품 처리
@@ -32,26 +33,26 @@ class BestBuyDetailCrawler(BaseCrawler):
     BestBuy Detail 페이지 크롤러
     """
 
-    def __init__(self, batch_id):
+    def __init__(self, test_mode=True, batch_id=None):
         """
         초기화
 
         Args:
-            batch_id (str): 배치 ID (필수)
-
-        Raises: ValueError: batch_id가 제공되지 않은 경우
+            test_mode (bool): 테스트 모드 (기본값: True)
+                             - True: 1개 제품만 크롤링
+                             - False: 전체 제품 크롤링
+            batch_id (str): 배치 ID (기본값: None)
+                           - None: 기본값 사용 (b_20251125_012112)
+                           - 문자열: 통합 크롤러에서 전달된 배치 ID 사용
         """
         super().__init__()
-
-        if not batch_id:
-            raise ValueError(
-                "batch_id is required. "
-                "Detail crawler must be called from integrated crawler with batch_id."
-            )
-
-        self.batch_id = batch_id
+        self.test_mode = test_mode
         self.account_name = 'Bestbuy'
         self.page_type = 'detail'
+        self.batch_id = batch_id
+
+        # 테스트 설정
+        self.test_count = 1  # 테스트 모드에서 처리할 제품 수
 
     def initialize(self):
         """
@@ -61,7 +62,7 @@ class BestBuyDetailCrawler(BaseCrawler):
         """
         print("\n" + "="*60)
         print(f"[INFO] BestBuy Detail Crawler Initialization")
-        print(f"[INFO] Batch ID: {self.batch_id}")
+        print(f"[INFO] Test Mode: {'ON (1 product)' if self.test_mode else 'OFF (all products)'}")
         print("="*60 + "\n")
 
         # 1. DB 연결
@@ -75,7 +76,14 @@ class BestBuyDetailCrawler(BaseCrawler):
         # 3. WebDriver 설정
         self.setup_driver()
 
-        # 4. 오래된 로그 정리
+        # 4. 배치 ID 설정 (없으면 기본값 사용)
+        if not self.batch_id:
+            self.batch_id = 'b_20251125_014141'
+            print(f"[INFO] Using default Batch ID: {self.batch_id}")
+        else:
+            print(f"[INFO] Batch ID received: {self.batch_id}")
+
+        # 5. 오래된 로그 정리
         self.cleanup_old_logs()
 
         return True
@@ -91,7 +99,7 @@ class BestBuyDetailCrawler(BaseCrawler):
 
             # product_list에서 hhp_retail_com으로 매핑할 필드 조회
             query = """
-                SELECT 
+                SELECT
                     page_type,
                     retailer_sku_name,
                     final_sku_price,
@@ -114,6 +122,10 @@ class BestBuyDetailCrawler(BaseCrawler):
                   AND product_url IS NOT NULL
                 ORDER BY product_url, id
             """
+
+            # 테스트 모드일 때 LIMIT 추가
+            if self.test_mode:
+                query += f" LIMIT {self.test_count}"
 
             cursor.execute(query, (self.account_name, self.batch_id))
             rows = cursor.fetchall()
@@ -906,17 +918,9 @@ class BestBuyDetailCrawler(BaseCrawler):
 
 def main():
     """
-    개별 실행 시 진입점
+    개별 실행 시 진입점 (테스트 모드 ON)
     """
-    import sys
-
-    if len(sys.argv) < 2:
-        print("[ERROR] batch_id is required")
-        print("Usage: python bby_hhp_dt.py <batch_id>")
-        sys.exit(1)
-
-    batch_id = sys.argv[1]
-    crawler = BestBuyDetailCrawler(batch_id=batch_id)
+    crawler = BestBuyDetailCrawler(test_mode=True)
     success = crawler.run()
 
     if success:
