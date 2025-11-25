@@ -56,7 +56,7 @@ class WalmartBSRCrawler(BaseCrawler):
 
         # 테스트 설정
         self.test_page = 1
-        self.test_count = 2
+        self.test_count = 1
 
         # BSR 순위 카운터
         self.current_bsr_rank = 0
@@ -630,18 +630,29 @@ class WalmartBSRCrawler(BaseCrawler):
                 saved_count = self.save_products(products)
                 total_products += saved_count
             else:
-                # 운영 모드: 2페이지 크롤링 (DB 저장)
-                max_pages = 2
+                # 운영 모드: 100개 제품 수집될 때까지 페이지 크롤링 (DB 저장)
+                max_products = 100
+                page_num = 1
 
-                for page_num in range(1, max_pages + 1):
+                while total_products < max_products:
+                    print(f"[INFO] Current progress: {total_products}/{max_products} products collected")
+
                     products = self.crawl_page(page_num)
 
                     if not products:
-                        print(f"[WARNING] No products found at page {page_num}, continuing to next page...")
-                        continue
+                        print(f"[WARNING] No products found at page {page_num}, stopping crawler...")
+                        break
 
                     saved_count = self.save_products(products)
                     total_products += saved_count
+
+                    # 목표 달성 확인
+                    if total_products >= max_products:
+                        print(f"[INFO] Target reached: {total_products} products collected")
+                        break
+
+                    # 다음 페이지로 이동
+                    page_num += 1
 
                     # 페이지 간 대기
                     time.sleep(30)

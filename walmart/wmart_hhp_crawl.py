@@ -109,13 +109,13 @@ class WalmartIntegratedCrawler:
                 print(f"\n[SKIP] BSR Crawler (resume_from={self.resume_from})\n")
 
             # ========================================
-            # STEP 3: Detail 크롤러 실행
+            # STEP 3: Detail 크롤러 실행 (운영 모드)
             # ========================================
             print("\n" + "="*80)
-            print("STEP 3: Detail Crawler (All Products)")
+            print("STEP 3: Detail Crawler (Production Mode - All Products)")
             print("="*80 + "\n")
 
-            detail_crawler = WalmartDetailCrawler(batch_id=self.batch_id)
+            detail_crawler = WalmartDetailCrawler(test_mode=False, batch_id=self.batch_id)
             detail_success = detail_crawler.run()
 
             if not detail_success:
