@@ -1,8 +1,8 @@
 """
 BestBuy 통합 크롤러 (운영용)
-- Main → BSR → Promotion → Detail 순차 실행
+- Main → BSR → Trend → Detail 순차 실행
 - 동일한 batch_id로 전체 파이프라인 실행
-- 운영 모드: Main(최대 400개) + BSR(2페이지) + Promotion(2페이지) + Detail(전체)
+- 운영 모드: Main(최대 400개) + BSR(2페이지) + Trend(2페이지) + Detail(전체)
 - 재시작 기능: --resume-from 옵션으로 특정 단계부터 재개 가능
 """
 
@@ -18,7 +18,7 @@ setup_environment(__file__)
 
 from bestbuy.bby_hhp_main import BestBuyMainCrawler
 from bestbuy.bby_hhp_bsr import BestBuyBSRCrawler
-from bestbuy.bby_hhp_pmt import BestBuyPromotionCrawler
+from bestbuy.bby_hhp_trend import BestBuyTrendCrawler
 from bestbuy.bby_hhp_dt import BestBuyDetailCrawler
 from common.base_crawler import BaseCrawler
 
@@ -26,7 +26,7 @@ from common.base_crawler import BaseCrawler
 class BestBuyIntegratedCrawler:
     """
     BestBuy 통합 크롤러 (운영용)
-    Main → BSR → Promotion → Detail 순차 실행
+    Main → BSR → Trend → Detail 순차 실행
     """
 
     def __init__(self, resume_from=None, batch_id=None):
@@ -34,7 +34,7 @@ class BestBuyIntegratedCrawler:
         초기화
 
         Args:
-            resume_from (str): 재시작할 단계 ('main', 'bsr', 'promotion', 'detail', None)
+            resume_from (str): 재시작할 단계 ('main', 'bsr', 'trend', 'detail', None)
             batch_id (str): 재시작 시 사용할 배치 ID (resume_from 사용 시 필수)
         """
         self.account_name = 'Bestbuy'
@@ -52,8 +52,8 @@ class BestBuyIntegratedCrawler:
         0. 통합 크롤러에서 batch_id 생성 (또는 기존 batch_id 사용)
         1. Main 크롤러 (운영 모드: 최대 400개 제품)
         2. BSR 크롤러 (운영 모드: 2페이지)
-        3. Promotion 크롤러 (운영 모드: 2페이지)
-        4. Detail 크롤러 (Main + BSR + Promotion에서 수집한 모든 제품)
+        3. Trend 크롤러 (운영 모드: 2페이지)
+        4. Detail 크롤러 (Main + BSR + Trend에서 수집한 모든 제품)
 
         Returns: bool: 성공 시 True, 실패 시 False
         """
@@ -80,7 +80,7 @@ class BestBuyIntegratedCrawler:
             crawl_results = {
                 'main': None,
                 'bsr': None,
-                'promotion': None,
+                'trend': None,
                 'detail': None
             }
 
@@ -129,26 +129,26 @@ class BestBuyIntegratedCrawler:
                 crawl_results['bsr'] = 'skipped'
 
             # ========================================
-            # STEP 3: Promotion 크롤러 실행 (운영 모드)
+            # STEP 3: Trend 크롤러 실행 (운영 모드)
             # ========================================
-            if not self.resume_from or self.resume_from in ['main', 'bsr', 'promotion']:
+            if not self.resume_from or self.resume_from in ['main', 'bsr', 'trend']:
                 print("\n" + "="*80)
-                print("STEP 3: Promotion Crawler (Production Mode)")
+                print("STEP 3: Trend Crawler (Production Mode)")
                 print("="*80 + "\n")
 
                 try:
-                    pmt_crawler = BestBuyPromotionCrawler(test_mode=False, batch_id=self.batch_id)
-                    pmt_success = pmt_crawler.run()
-                    crawl_results['promotion'] = pmt_success
+                    trend_crawler = BestBuyTrendCrawler(test_mode=False, batch_id=self.batch_id)
+                    trend_success = trend_crawler.run()
+                    crawl_results['trend'] = trend_success
 
-                    if not pmt_success:
-                        print("\n[WARNING] Promotion crawler failed. Continuing to next step...")
+                    if not trend_success:
+                        print("\n[WARNING] Trend crawler failed. Continuing to next step...")
                 except Exception as e:
-                    print(f"\n[ERROR] Promotion crawler exception: {e}")
-                    crawl_results['promotion'] = False
+                    print(f"\n[ERROR] Trend crawler exception: {e}")
+                    crawl_results['trend'] = False
             else:
-                print(f"\n[SKIP] Promotion Crawler (resume_from={self.resume_from})\n")
-                crawl_results['promotion'] = 'skipped'
+                print(f"\n[SKIP] Trend Crawler (resume_from={self.resume_from})\n")
+                crawl_results['trend'] = 'skipped'
 
             # ========================================
             # STEP 4: Detail 크롤러 실행
@@ -221,8 +221,8 @@ def main():
         # Detail부터 재시작
         python bby_hhp_crawl.py --resume-from detail --batch-id b_20250123_143045
 
-        # Promotion부터 재시작
-        python bby_hhp_crawl.py --resume-from promotion --batch-id b_20250123_143045
+        # Trend부터 재시작
+        python bby_hhp_crawl.py --resume-from trend --batch-id b_20250123_143045
     """
     parser = argparse.ArgumentParser(
         description='BestBuy HHP Integrated Crawler (Production Mode)',
@@ -232,8 +232,8 @@ def main():
     parser.add_argument(
         '--resume-from',
         type=str,
-        choices=['main', 'bsr', 'promotion', 'detail'],
-        help='재시작할 단계 (main, bsr, promotion, detail)'
+        choices=['main', 'bsr', 'trend', 'detail'],
+        help='재시작할 단계 (main, bsr, trend, detail)'
     )
 
     parser.add_argument(
