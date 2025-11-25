@@ -328,41 +328,42 @@ class BestBuyDetailCrawler(BaseCrawler):
                 print("[INFO] Scrolling to find similar products section...")
                 similar_products_found = False
 
-                try:
-                    # 현재 스크롤 위치 저장
-                    current_scroll = self.driver.execute_script("return window.pageYOffset;")
+                # 현재 스크롤 위치에서 시작
+                current_scroll = self.driver.execute_script("return window.pageYOffset;")
+                scroll_step = 400  # 400px씩 스크롤
+                page_height = self.driver.execute_script("return document.body.scrollHeight")
 
-                    # 최대 10번 시도 (300px씩)
-                    max_attempts = 10
-                    scroll_step = 300
+                print(f"[DEBUG] Starting scroll from {current_scroll}px, page height: {page_height}px")
 
-                    for attempt in range(max_attempts):
-                        try:
-                            # 유사 제품 컨테이너 찾기 시도 (짧은 타임아웃)
-                            similar_element = WebDriverWait(self.driver, 5).until(
-                                lambda driver: driver.find_elements(By.XPATH, similar_products_container_xpath)
-                            )
+                # 페이지 끝까지 스크롤하면서 찾기 (TV 크롤러 방식)
+                while current_scroll < page_height:
+                    try:
+                        # 현재 위치에서 요소 찾기 시도 (타임아웃 없이)
+                        similar_elements = self.driver.find_elements(By.XPATH, similar_products_container_xpath)
 
-                            if similar_element:
-                                print(f"[INFO] Similar products section found at scroll position {current_scroll}px")
-                                similar_products_found = True
-                                break
-                        except Exception:
-                            # 못 찾았으면 300px 아래로 스크롤
-                            current_scroll += scroll_step
-                            self.driver.execute_script(f"window.scrollTo(0, {current_scroll});")
-                            time.sleep(0.5)  # 짧은 대기
+                        if similar_elements:
+                            print(f"[INFO] Similar products section found at scroll position {current_scroll}px")
+                            similar_products_found = True
+                            # 요소를 찾았으면 화면에 보이도록 스크롤
+                            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", similar_elements[0])
+                            time.sleep(2)  # DOM 안정화 대기
+                            break
+                    except Exception as e:
+                        print(f"[DEBUG] Search failed at {current_scroll}px: {e}")
 
-                    if similar_products_found:
-                        # HTML 다시 파싱 (스크롤 후 업데이트된 DOM)
-                        time.sleep(1)  # 최종 안정화 대기
-                        page_html = self.driver.page_source
-                        tree = html.fromstring(page_html)
-                    else:
-                        print(f"[WARNING] Could not find similar products section after {max_attempts} scroll attempts")
+                    # 못 찾았으면 계속 스크롤
+                    current_scroll += scroll_step
+                    self.driver.execute_script(f"window.scrollTo(0, {current_scroll});")
+                    time.sleep(1)  # 스크롤 후 대기 (Lazy Loading)
 
-                except Exception as e:
-                    print(f"[WARNING] Error while searching for similar products section: {e}")
+                if similar_products_found:
+                    # HTML 다시 파싱 (스크롤 후 업데이트된 DOM)
+                    time.sleep(1)  # 최종 안정화 대기
+                    page_html = self.driver.page_source
+                    tree = html.fromstring(page_html)
+                    print(f"[INFO] Re-parsed HTML after finding similar products")
+                else:
+                    print(f"[WARNING] Could not find similar products section after scrolling entire page")
 
                 # 각 유사 제품 컨테이너 (카드) 추출
                 similar_product_containers = tree.xpath(similar_products_container_xpath)
@@ -475,8 +476,11 @@ class BestBuyDetailCrawler(BaseCrawler):
             # 기타 필드 추출
             trade_in = self.extract_with_fallback(tree, self.xpaths.get('trade_in', {}).get('xpath'))
             top_mentions = self.extract_with_fallback(tree, self.xpaths.get('top_mentions', {}).get('xpath'))
-            recommendation_intent = self.extract_with_fallback(tree, self.xpaths.get('recommendation_intent', {}).get('xpath'))
 
+            # recommendation_intent 추출 및 후처리
+            recommendation_intent_raw = self.extract_with_fallback(tree, self.xpaths.get('recommendation_intent', {}).get('xpath'))
+            recommendation_intent = recommendation_intent_raw + " would recommend to a friend"
+           
             # ========== 4단계: 리뷰 더보기 버튼 클릭 및 상세 리뷰 추출 ==========
             # 리뷰 데이터 추출: "See All Customer Reviews" 버튼 클릭 후 추출
             detailed_review_content = None
