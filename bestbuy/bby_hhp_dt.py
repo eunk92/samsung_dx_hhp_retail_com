@@ -396,7 +396,7 @@ class BestBuyDetailCrawler(BaseCrawler):
                         print(f"[INFO] Extracted {len(similar_product_names)} similar product names")
 
                         # 모든 유사 제품명을 ||| 구분자로 연결
-                        retailer_sku_name_similar = '|||'.join(similar_product_names) if similar_product_names else None
+                        retailer_sku_name_similar = ' ||| '.join(similar_product_names) if similar_product_names else None
                     else:
                         print(f"[INFO] No similar product cards found")
                         retailer_sku_name_similar = None
@@ -535,8 +535,19 @@ class BestBuyDetailCrawler(BaseCrawler):
                             if reviews_list:
                                 # 최대 20개만 추출
                                 reviews_list = reviews_list[:20]
-                                # 구분자로 연결
-                                detailed_review_content = '|||'.join(reviews_list)
+
+                                # 각 리뷰에서 줄바꿈 제거 및 포맷팅
+                                formatted_reviews = []
+                                for idx, review in enumerate(reviews_list, 1):
+                                    # \r\n과 \n을 공백 하나로 치환
+                                    cleaned_review = review.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
+                                    # 연속된 공백을 하나로 정리
+                                    cleaned_review = ' '.join(cleaned_review.split())
+                                    # review1 - 내용 형식으로 저장
+                                    formatted_reviews.append(f"review{idx} - {cleaned_review}")
+
+                                # ||| 구분자로 연결
+                                detailed_review_content = ' ||| '.join(formatted_reviews)
                                 print(f"[INFO] Extracted {len(reviews_list)} reviews")
                             else:
                                 print(f"[WARNING] No reviews found on review page")
