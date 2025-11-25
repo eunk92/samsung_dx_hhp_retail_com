@@ -25,11 +25,13 @@ from common.setup import setup_environment
 setup_environment(__file__)
 
 from config import DB_CONFIG
+from common.base_crawler import BaseCrawler
 
 
-class WalmartMainCrawler:
+class WalmartMainCrawler(BaseCrawler):
     """
     Walmart Main 페이지 크롤러 (Playwright 기반)
+    BaseCrawler 상속으로 공통 메서드 사용
     """
 
     def __init__(self, test_mode=True, batch_id=None):
@@ -40,6 +42,7 @@ class WalmartMainCrawler:
             test_mode (bool): 테스트 모드 (기본값: True)
             batch_id (str): 배치 ID (기본값: None)
         """
+        super().__init__()  # BaseCrawler 초기화
         self.test_mode = test_mode
         self.account_name = 'Walmart'
         self.page_type = 'main'
@@ -52,10 +55,6 @@ class WalmartMainCrawler:
         self.browser = None
         self.context = None
         self.page = None
-
-        # DB 연결
-        self.db_conn = None
-        self.xpaths = {}
 
         # 테스트 설정
         self.test_count = 1
@@ -74,18 +73,84 @@ class WalmartMainCrawler:
             print(f"[ERROR] Database connection failed: {e}")
             return False
 
+    def format_walmart_price(self, price_result):
+        """
+        Walmart 가격 결과를 정제하여 $XX.XX 형식으로 변환
+
+        Args:
+            price_result: XPath로 추출한 가격 결과 (리스트 또는 문자열)
+
+        Returns:
+            str: 정제된 가격 문자열 (예: '$39.88') 또는 None
+        """
+        if not price_result:
+            return None
+
+        try:
+            # 리스트인 경우 (//text() 사용 시)
+            if isinstance(price_result, list):
+                # 공백 제거하고 빈 문자열 제외
+                parts = [p.strip() for p in price_result if p.strip()]
+
+                if not parts:
+                    return None
+
+                # 패턴: ['$', 'XX', 'XX'] - 달러, 정수부, 소수부
+                if len(parts) >= 3:
+                    # $ 찾기
+                    dollar_idx = None
+                    for i, p in enumerate(parts):
+                        if '$' in p:
+                            dollar_idx = i
+                            break
+
+                    if dollar_idx is not None and dollar_idx + 2 < len(parts):
+                        # 정수부와 소수부 가져오기
+                        dollars = parts[dollar_idx + 1]  # 정수부
+                        cents = parts[dollar_idx + 2]    # 소수부
+
+                        # 숫자인지 확인
+                        if dollars.isdigit() and cents.isdigit():
+                            return f"${dollars}.{cents}"
+
+                # 모든 텍스트를 연결해서 처리
+                price_result = ''.join(parts)
+
+            # 문자열인 경우
+            if isinstance(price_result, str):
+                # 이미 완전한 가격 형식인 경우
+                if '$' in price_result and '.' in price_result:
+                    return price_result.strip()
+
+                # $와 숫자만 추출
+                import re
+                match = re.search(r'\$(\d+)\.?(\d{2})?', price_result)
+                if match:
+                    dollars = match.group(1)
+                    cents = match.group(2) if match.group(2) else '00'
+                    return f"${dollars}.{cents}"
+
+            return None
+
+        except Exception as e:
+            print(f"[WARNING] Price formatting failed: {e}")
+            return None
+
     def load_xpaths(self):
         """XPath 셀렉터 로드"""
         try:
             cursor = self.db_conn.cursor()
             cursor.execute("""
-                SELECT field_name, xpath
+                SELECT data_field, xpath, css_selector
                 FROM hhp_xpath_selectors
-                WHERE account_name = %s AND page_type = %s
+                WHERE account_name = %s AND page_type = %s AND is_active = TRUE
             """, (self.account_name, self.page_type))
 
             for row in cursor.fetchall():
-                self.xpaths[row[0]] = {'xpath': row[1]}
+                self.xpaths[row[0]] = {
+                    'xpath': row[1],
+                    'css': row[2]
+                }
 
             cursor.close()
             print(f"[OK] Loaded {len(self.xpaths)} XPath selectors")
@@ -100,8 +165,8 @@ class WalmartMainCrawler:
         try:
             cursor = self.db_conn.cursor()
             cursor.execute("""
-                SELECT page_url
-                FROM hhp_page_urls
+                SELECT url_template
+                FROM hhp_target_page_url
                 WHERE account_name = %s AND page_type = %s
             """, (self.account_name, self.page_type))
 
@@ -120,15 +185,6 @@ class WalmartMainCrawler:
             print(f"[ERROR] Failed to load URL: {e}")
             return False
 
-    def generate_batch_id(self):
-        """배치 ID 생성"""
-        now = datetime.now()
-        return f"w_{now.strftime('%Y%m%d_%H%M%S')}"
-
-    def generate_calendar_week(self):
-        """캘린더 주차 생성"""
-        now = datetime.now()
-        return now.strftime('%Y-W%U')
 
     def setup_playwright(self):
         """Playwright 브라우저 설정"""
@@ -181,35 +237,50 @@ class WalmartMainCrawler:
         try:
             print("[INFO] Checking for CAPTCHA...")
 
-            # CAPTCHA 버튼 찾기
+            # 페이지 로딩 대기
+            time.sleep(3)
+
+            # CAPTCHA 버튼 찾기 (더 많은 셀렉터 추가)
             captcha_selectors = [
-                'text=PRESS & HOLD',
+                'button:has-text("PRESS & HOLD")',
+                'div:has-text("PRESS & HOLD")',
                 'text="PRESS & HOLD"',
                 'text=/PRESS.*HOLD/i',
                 'button:has-text("PRESS")',
-                'button:has-text("HOLD")',
+                'div:has-text("PRESS")',
+                '[aria-label*="press"]',
+                '[class*="PressHold"]',
+                '[class*="presshold"]',
                 '[class*="captcha"]',
-                '[class*="PressHold"]'
+                '[id*="captcha"]',
+                'button',  # 모든 버튼 확인
+                'div[role="button"]'
             ]
 
             button = None
             for selector in captcha_selectors:
                 try:
+                    # 더 긴 타임아웃 사용
                     temp_button = self.page.locator(selector).first
-                    if temp_button.is_visible(timeout=2000):
-                        button = temp_button
-                        print(f"[OK] CAPTCHA detected with selector: {selector}")
-                        break
+                    if temp_button.is_visible(timeout=5000):
+                        # 텍스트 확인
+                        text = temp_button.inner_text(timeout=2000).upper()
+                        if 'PRESS' in text or 'HOLD' in text or 'CAPTCHA' in text:
+                            button = temp_button
+                            print(f"[OK] CAPTCHA detected with selector: {selector}")
+                            print(f"[DEBUG] Button text: {text}")
+                            break
                 except:
                     continue
 
             if not button:
                 # CAPTCHA 키워드 확인
                 page_content = self.page.content().lower()
-                if any(keyword in page_content for keyword in ['press & hold', 'captcha', 'human verification']):
+                if any(keyword in page_content for keyword in ['press & hold', 'press and hold', 'captcha', 'human verification']):
                     print("[WARNING] CAPTCHA keywords found but button not located")
-                    print("[INFO] Waiting 30 seconds for manual intervention...")
-                    time.sleep(30)
+                    print("[INFO] Please solve CAPTCHA manually...")
+                    print("[INFO] Waiting 45 seconds for manual intervention...")
+                    time.sleep(45)
                     return True
                 else:
                     print("[INFO] No CAPTCHA detected")
@@ -306,110 +377,43 @@ class WalmartMainCrawler:
             products = []
             for idx, item in enumerate(containers_to_process, 1):
                 try:
+                    # main_rank 계산
                     self.current_rank += 1
+
+                    # product_url 추출 및 절대 경로 변환
+                    product_url_raw = self.extract_with_fallback(item, self.xpaths.get('product_url', {}).get('xpath'))
+                    product_url = f"https://www.walmart.com{product_url_raw}" if product_url_raw and product_url_raw.startswith('/') else product_url_raw
+
+                    # 가격 추출 및 정제
+                    final_price_xpath = self.xpaths.get('final_sku_price', {}).get('xpath')
+                    final_price_raw = item.xpath(final_price_xpath) if final_price_xpath else None
+                    final_sku_price = self.format_walmart_price(final_price_raw)
 
                     product_data = {
                         'account_name': self.account_name,
                         'page_type': self.page_type,
+                        'retailer_sku_name': self.extract_with_fallback(item, self.xpaths.get('retailer_sku_name', {}).get('xpath')),
+                        'final_sku_price': final_sku_price,
+                        'original_sku_price': self.extract_with_fallback(item, self.xpaths.get('original_sku_price', {}).get('xpath')),
+                        'offer': self.extract_with_fallback(item, self.xpaths.get('offer', {}).get('xpath')),
+                        'pick_up_availability': self.extract_with_fallback(item, self.xpaths.get('pick_up_availability', {}).get('xpath')),
+                        'shipping_availability': self.extract_with_fallback(item, self.xpaths.get('shipping_availability', {}).get('xpath')),
+                        'delivery_availability': self.extract_with_fallback(item, self.xpaths.get('delivery_availability', {}).get('xpath')),
+                        'sku_status': self.extract_with_fallback(item, self.xpaths.get('sku_status', {}).get('xpath')),
+                        'retailer_membership_discounts': self.extract_with_fallback(item, self.xpaths.get('retailer_membership_discounts', {}).get('xpath')),
+                        'available_quantity_for_purchase': self.extract_with_fallback(item, self.xpaths.get('available_quantity_for_purchase', {}).get('xpath')),
+                        'inventory_status': self.extract_with_fallback(item, self.xpaths.get('inventory_status', {}).get('xpath')),
                         'main_rank': self.current_rank,
+                        'product_url': product_url,
                         'calendar_week': self.calendar_week,
                         'crawl_strdatetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                         'batch_id': self.batch_id
                     }
 
-                    # 각 필드 추출 (try-except로 감싸기)
-                    try:
-                        product_url_raw = item.xpath(self.xpaths.get('product_url', {}).get('xpath'))
-                        if product_url_raw:
-                            product_url_raw = product_url_raw[0] if isinstance(product_url_raw, list) else product_url_raw
-                            product_data['product_url'] = f"https://www.walmart.com{product_url_raw}" if product_url_raw.startswith('/') else product_url_raw
-                        else:
-                            product_data['product_url'] = None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract product_url for product {idx}: {e}")
-                        product_data['product_url'] = None
-
-                    try:
-                        retailer_sku_name_raw = item.xpath(self.xpaths.get('retailer_sku_name', {}).get('xpath'))
-                        product_data['retailer_sku_name'] = retailer_sku_name_raw[0] if retailer_sku_name_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract retailer_sku_name for product {idx}: {e}")
-                        product_data['retailer_sku_name'] = None
-
-                    try:
-                        final_sku_price_raw = item.xpath(self.xpaths.get('final_sku_price', {}).get('xpath'))
-                        product_data['final_sku_price'] = final_sku_price_raw[0] if final_sku_price_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract final_sku_price for product {idx}: {e}")
-                        product_data['final_sku_price'] = None
-
-                    try:
-                        original_sku_price_raw = item.xpath(self.xpaths.get('original_sku_price', {}).get('xpath'))
-                        product_data['original_sku_price'] = original_sku_price_raw[0] if original_sku_price_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract original_sku_price for product {idx}: {e}")
-                        product_data['original_sku_price'] = None
-
-                    try:
-                        offer_raw = item.xpath(self.xpaths.get('offer', {}).get('xpath'))
-                        product_data['offer'] = offer_raw[0] if offer_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract offer for product {idx}: {e}")
-                        product_data['offer'] = None
-
-                    try:
-                        pickup_raw = item.xpath(self.xpaths.get('pick_up_availability', {}).get('xpath'))
-                        product_data['pick_up_availability'] = pickup_raw[0] if pickup_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract pick_up_availability for product {idx}: {e}")
-                        product_data['pick_up_availability'] = None
-
-                    try:
-                        shipping_raw = item.xpath(self.xpaths.get('shipping_availability', {}).get('xpath'))
-                        product_data['shipping_availability'] = shipping_raw[0] if shipping_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract shipping_availability for product {idx}: {e}")
-                        product_data['shipping_availability'] = None
-
-                    try:
-                        delivery_raw = item.xpath(self.xpaths.get('delivery_availability', {}).get('xpath'))
-                        product_data['delivery_availability'] = delivery_raw[0] if delivery_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract delivery_availability for product {idx}: {e}")
-                        product_data['delivery_availability'] = None
-
-                    try:
-                        sku_status_raw = item.xpath(self.xpaths.get('sku_status', {}).get('xpath'))
-                        product_data['sku_status'] = sku_status_raw[0] if sku_status_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract sku_status for product {idx}: {e}")
-                        product_data['sku_status'] = None
-
-                    try:
-                        membership_raw = item.xpath(self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
-                        product_data['retailer_membership_discounts'] = membership_raw[0] if membership_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract retailer_membership_discounts for product {idx}: {e}")
-                        product_data['retailer_membership_discounts'] = None
-
-                    try:
-                        quantity_raw = item.xpath(self.xpaths.get('available_quantity_for_purchase', {}).get('xpath'))
-                        product_data['available_quantity_for_purchase'] = quantity_raw[0] if quantity_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract available_quantity_for_purchase for product {idx}: {e}")
-                        product_data['available_quantity_for_purchase'] = None
-
-                    try:
-                        inventory_raw = item.xpath(self.xpaths.get('inventory_status', {}).get('xpath'))
-                        product_data['inventory_status'] = inventory_raw[0] if inventory_raw else None
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract inventory_status for product {idx}: {e}")
-                        product_data['inventory_status'] = None
-
                     products.append(product_data)
 
                 except Exception as e:
-                    print(f"[WARNING] Failed to process product {idx}/{len(containers_to_process)}, skipping: {e}")
+                    print(f"[WARNING] Failed to extract product {idx}/{len(containers_to_process)}, skipping: {e}")
                     continue
 
             return products
@@ -522,9 +526,9 @@ class WalmartMainCrawler:
         if not self.setup_playwright():
             return False
 
-        # 5. 배치 ID 및 캘린더 주차 생성
+        # 5. 배치 ID 및 캘린더 주차 생성 (BaseCrawler 상속 메서드 사용)
         if not self.batch_id:
-            self.batch_id = self.generate_batch_id()
+            self.batch_id = self.generate_batch_id(self.account_name)
             print(f"[INFO] Batch ID generated: {self.batch_id}")
         else:
             print(f"[INFO] Batch ID received: {self.batch_id}")
