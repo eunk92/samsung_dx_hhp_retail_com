@@ -1,6 +1,7 @@
 # Web Scraping
 selenium>=4.0.0
 lxml>=4.9.0
+playwright>=1.40.0
 
 # Database
 psycopg2-binary>=2.9.0
