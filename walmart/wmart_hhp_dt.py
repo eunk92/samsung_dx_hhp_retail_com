@@ -285,7 +285,8 @@ class WalmartDetailCrawler(BaseCrawler):
                     bsr_rank,
                     product_url,
                     calendar_week,
-                    crawl_strdatetime
+                    crawl_strdatetime,
+                    page_type
                 FROM wmart_hhp_product_list
                 WHERE account_name = %s
                   AND batch_id = %s
@@ -319,7 +320,8 @@ class WalmartDetailCrawler(BaseCrawler):
                     'bsr_rank': row[12],
                     'product_url': row[13],
                     'calendar_week': row[14],
-                    'crawl_strdatetime': row[15]
+                    'crawl_strdatetime': row[15],
+                    'page_type':row[16]
                 }
                 product_list.append(product)
 
@@ -915,7 +917,7 @@ class WalmartDetailCrawler(BaseCrawler):
                     retailer_sku_name_similar,
                     detailed_review_content,
                     main_rank, bsr_rank,
-                    calendar_week, crawl_strdatetime, batch_id
+                    calendar_week, crawl_strdatetime, batch_id, 
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
@@ -932,7 +934,7 @@ class WalmartDetailCrawler(BaseCrawler):
                     'HHP',
                     product.get('item'),
                     self.account_name,
-                    'detail',
+                    product.get('page_type'),
                     product.get('count_of_reviews'),
                     product.get('retailer_sku_name'),
                     product.get('product_url'),
