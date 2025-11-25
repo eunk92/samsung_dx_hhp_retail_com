@@ -10,6 +10,7 @@ BestBuy Detail 페이지 크롤러
 import sys
 import os
 import time
+import random
 import traceback
 from datetime import datetime
 from lxml import html
@@ -202,115 +203,10 @@ class BestBuyDetailCrawler(BaseCrawler):
             # 상세 페이지 로드
             self.driver.get(product_url)
 
-            # 동적 페이지 로드 완료 대기
-            try:
-                print("[INFO] Waiting for dynamic page to fully load...")
-
-                # 1단계: document.readyState가 'complete'가 될 때까지 대기
-                WebDriverWait(self.driver, 30).until(
-                    lambda driver: driver.execute_script("return document.readyState") == "complete"
-                )
-                print("[INFO] Document ready state: complete")
-
-                # 2단계: jQuery가 있다면 Ajax 요청 완료 대기
-                try:
-                    WebDriverWait(self.driver, 10).until(
-                        lambda driver: driver.execute_script("return typeof jQuery !== 'undefined' ? jQuery.active === 0 : true")
-                    )
-                    print("[INFO] jQuery Ajax requests completed")
-                except Exception:
-                    print("[INFO] jQuery not detected or Ajax check failed, continuing...")
-
-                # 3단계: 네트워크 활동이 안정될 때까지 대기 (DOM 변화 감지)
-                print("[INFO] Waiting for network activity to stabilize...")
-                stable_count = 0
-                last_html_length = 0
-
-                for _ in range(10):  # 최대 10번 체크 (10초)
-                    time.sleep(1)
-                    current_html_length = len(self.driver.page_source)
-
-                    if current_html_length == last_html_length:
-                        stable_count += 1
-                        if stable_count >= 3:  # 3초 동안 변화 없으면 안정된 것으로 판단
-                            print("[INFO] Page stabilized (no changes for 3 seconds)")
-                            break
-                    else:
-                        stable_count = 0
-
-                    last_html_length = current_html_length
-
-                # 4단계: 주요 요소들이 로드되었는지 확인 (페이지 상단 요소만)
-                print("[INFO] Verifying key elements are loaded...")
-                star_rating_xpath = self.xpaths.get('star_rating', {}).get('xpath')
-                count_of_reviews_xpath = self.xpaths.get('count_of_reviews', {}).get('xpath')
-                count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
-                recommendation_intent_xpath = self.xpaths.get('recommendation_intent', {}).get('xpath')
-
-                # 디버깅: XPath 확인
-                print(f"[DEBUG] star_rating_xpath: {star_rating_xpath}")
-                print(f"[DEBUG] count_of_reviews_xpath: {count_of_reviews_xpath}")
-                print(f"[DEBUG] count_of_star_ratings_xpath: {count_of_star_ratings_xpath}")
-                print(f"[DEBUG] recommendation_intent_xpath: {recommendation_intent_xpath}")
-
-                # Selenium용 xpath 변환 함수 (요소만 찾기)
-                def convert_to_element_xpath(xpath_str):
-                    """Selenium용으로 /text()와 normalize-space() 제거"""
-                    if not xpath_str:
-                        return None
-                    # /text() 제거
-                    xpath_str = xpath_str.replace('/text()', '')
-                    # normalize-space(...) -> ... 추출
-                    if 'normalize-space(' in xpath_str:
-                        import re
-                        match = re.search(r'normalize-space\((.*)\)', xpath_str)
-                        if match:
-                            xpath_str = match.group(1)
-                    return xpath_str
-
-                # 각 요소를 하나씩 확인하면서 디버깅
-                try:
-                    if star_rating_xpath:
-                        element_xpath = convert_to_element_xpath(star_rating_xpath)
-                        print(f"[DEBUG] Waiting for star_rating... (converted: {element_xpath})")
-                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, element_xpath))
-                        print("[DEBUG] ✓ star_rating found")
-                except Exception as e:
-                    print(f"[WARNING] star_rating not found: {e}")
-
-                try:
-                    if count_of_reviews_xpath:
-                        element_xpath = convert_to_element_xpath(count_of_reviews_xpath)
-                        print(f"[DEBUG] Waiting for count_of_reviews... (converted: {element_xpath})")
-                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, element_xpath))
-                        print("[DEBUG] ✓ count_of_reviews found")
-                except Exception as e:
-                    print(f"[WARNING] count_of_reviews not found: {e}")
-
-                try:
-                    if count_of_star_ratings_xpath:
-                        element_xpath = convert_to_element_xpath(count_of_star_ratings_xpath)
-                        print(f"[DEBUG] Waiting for count_of_star_ratings... (converted: {element_xpath})")
-                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, element_xpath))
-                        print("[DEBUG] ✓ count_of_star_ratings found")
-                except Exception as e:
-                    print(f"[WARNING] count_of_star_ratings not found: {e}")
-
-                try:
-                    if recommendation_intent_xpath:
-                        element_xpath = convert_to_element_xpath(recommendation_intent_xpath)
-                        print(f"[DEBUG] Waiting for recommendation_intent... (converted: {element_xpath})")
-                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, element_xpath))
-                        print("[DEBUG] ✓ recommendation_intent found")
-                except Exception as e:
-                    print(f"[WARNING] recommendation_intent not found: {e}")
-                print("[INFO] All key elements verified and loaded")
-                time.sleep(1)  # 최종 안정화 대기
-
-            except Exception as e:
-                print(f"[WARNING] Dynamic page load detection failed: {e}")
-                print("[INFO] Proceeding with data extraction anyway...")
-                time.sleep(3)  # fallback 대기
+            # TV 크롤러와 동일한 간단한 대기 방식
+            print("[INFO] Waiting for page to load...")
+            time.sleep(random.uniform(8, 12))  # 8~12초 랜덤 대기
+            print("[INFO] Page load complete")
 
             # HTML 파싱
             page_html = self.driver.page_source
@@ -319,26 +215,97 @@ class BestBuyDetailCrawler(BaseCrawler):
             # item: product_url에서 추출 (우선) 또는 XPath에서 추출 (fallback)
             item = self.extract_item_from_url(product_url)
 
-            # 리뷰 관련 필드 (data_extractor 후처리)
-            count_of_reviews_raw = self.extract_with_fallback(tree, self.xpaths.get('count_of_reviews', {}).get('xpath'))
-            count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw, self.account_name)
+            # ========== 1단계: HHP 스펙 추출 (specs_button 클릭 후 모달에서 추출) ==========
+            hhp_carrier = None
+            hhp_storage = None
+            hhp_color = None
 
-            star_rating_raw = self.extract_with_fallback(tree, self.xpaths.get('star_rating', {}).get('xpath'))
-            star_rating = data_extractor.extract_rating(star_rating_raw, self.account_name)
+            specs_button_xpath = self.xpaths.get('specs_button', {}).get('xpath')
+            if specs_button_xpath:
+                specs_button_found = False
 
-            count_of_star_ratings = data_extractor.extract_star_ratings_count(
-                tree,
-                count_of_reviews,
-                self.xpaths.get('count_of_star_ratings', {}).get('xpath'),
-                self.account_name
-            )
+                # 최대 3번 시도
+                for attempt in range(1, 4):
+                    try:
+                        print(f"[INFO] Attempt {attempt}/3: Trying to find specs button")
 
-            # 기타 필드 추출
-            trade_in = self.extract_with_fallback(tree, self.xpaths.get('trade_in', {}).get('xpath'))
-            top_mentions = self.extract_with_fallback(tree, self.xpaths.get('top_mentions', {}).get('xpath'))
-            recommendation_intent = self.extract_with_fallback(tree, self.xpaths.get('recommendation_intent', {}).get('xpath'))
+                        # 페이지 스크롤 (시도할 때마다 조금씩 다른 위치로)
+                        scroll_distance = 800 + (attempt * 300)
+                        self.driver.execute_script(f"window.scrollTo(0, {scroll_distance});")
+                        time.sleep(1)
 
-            # Compare Similar Products 섹션 추출 (Specs 모달 열기 전에 먼저 추출)
+                        # Specs 버튼 찾기 (짧은 타임아웃)
+                        specs_button = WebDriverWait(self.driver, 5).until(
+                            EC.element_to_be_clickable((By.XPATH, specs_button_xpath))
+                        )
+
+                        # 버튼이 화면에 보이도록 추가 스크롤
+                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", specs_button)
+                        time.sleep(1)
+
+                        print(f"[INFO] Specs button found, clicking to open modal")
+                        specs_button.click()
+                        specs_button_found = True
+                        break  # 성공하면 루프 종료
+
+                    except Exception as e:
+                        print(f"[WARNING] Attempt {attempt}/3 failed: {e}")
+                        if attempt == 3:
+                            print(f"[WARNING] Could not find specs button after 3 attempts, skipping HHP specs extraction")
+                        else:
+                            time.sleep(1)  # 다음 시도 전 대기
+
+                # 버튼을 찾았을 때만 모달 처리
+                if specs_button_found:
+                    try:
+                        # 모달이 완전히 로드될 때까지 대기 (carrier/storage/color 중 하나라도 나타날 때까지)
+                        try:
+                            WebDriverWait(self.driver, 10).until(
+                                lambda driver: driver.find_elements(By.XPATH, self.xpaths.get('hhp_carrier', {}).get('xpath', '//dummy')) or
+                                               driver.find_elements(By.XPATH, self.xpaths.get('hhp_storage', {}).get('xpath', '//dummy')) or
+                                               driver.find_elements(By.XPATH, self.xpaths.get('hhp_color', {}).get('xpath', '//dummy'))
+                            )
+                            print(f"[INFO] Specs modal fully loaded")
+                        except Exception:
+                            print(f"[WARNING] Timeout waiting for specs modal, proceeding anyway...")
+                            time.sleep(3)
+
+                        # 모달 HTML 파싱
+                        modal_html = self.driver.page_source
+                        modal_tree = html.fromstring(modal_html)
+
+                        # 모달에서 스펙 추출
+                        hhp_carrier = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
+                        hhp_storage = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
+                        hhp_color = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_color', {}).get('xpath'))
+
+                        print(f"[INFO] Extracted specs - Carrier: {hhp_carrier}, Storage: {hhp_storage}, Color: {hhp_color}")
+
+                        # 스펙 모달창 닫기 (닫기 버튼 클릭)
+                        try:
+                            # data-testid="brix-sheet-closeButton" 또는 aria-label="Close Sheet"로 닫기 버튼 찾기
+                            close_button_xpath = "//button[@data-testid='brix-sheet-closeButton' or @aria-label='Close Sheet']"
+                            close_button = WebDriverWait(self.driver, 5).until(
+                                EC.element_to_be_clickable((By.XPATH, close_button_xpath))
+                            )
+                            close_button.click()
+                            time.sleep(1)  # 모달이 닫힐 때까지 짧은 대기
+                            print(f"[INFO] Closed specs modal")
+                        except Exception as close_error:
+                            print(f"[WARNING] Failed to close specs modal: {close_error}")
+                            # 닫기 버튼 클릭 실패 시 ESC 키 시도
+                            try:
+                                from selenium.webdriver.common.keys import Keys
+                                self.driver.find_element("tag name", "body").send_keys(Keys.ESCAPE)
+                                time.sleep(1)
+                                print(f"[INFO] Closed specs modal using ESC key")
+                            except Exception:
+                                print(f"[WARNING] Could not close modal, proceeding anyway...")
+
+                    except Exception as e:
+                        print(f"[WARNING] Failed to extract specs from modal: {e}")
+
+            # ========== 2단계: 유사 제품 추출 (스크롤해서 찾기) ==========
             similar_products_container_xpath = self.xpaths.get('similar_products_container', {}).get('xpath')
 
             similar_products_data = []  # [{name, pros, cons, url}, ...]
@@ -474,99 +441,37 @@ class BestBuyDetailCrawler(BaseCrawler):
                     # 모든 유사 제품명을 ||| 구분자로 연결
                     retailer_sku_name_similar = '|||'.join(similar_product_names) if similar_product_names else None
 
-            # HHP 스펙 추출: specs_button 클릭 후 모달에서 추출
-            hhp_carrier = None
-            hhp_storage = None
-            hhp_color = None
+            # ========== 3단계: 리뷰 섹션 데이터 추출 (HTML에서) ==========
+            # HTML 다시 파싱 (스크롤 후 업데이트된 DOM)
+            page_html = self.driver.page_source
+            tree = html.fromstring(page_html)
 
-            specs_button_xpath = self.xpaths.get('specs_button', {}).get('xpath')
-            if specs_button_xpath:
-                specs_button_found = False
+            # 리뷰 관련 필드 (data_extractor 후처리)
+            count_of_reviews_raw = self.extract_with_fallback(tree, self.xpaths.get('count_of_reviews', {}).get('xpath'))
+            count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw, self.account_name)
 
-                # 최대 3번 시도
-                for attempt in range(1, 4):
-                    try:
-                        print(f"[INFO] Attempt {attempt}/3: Trying to find specs button")
+            star_rating_raw = self.extract_with_fallback(tree, self.xpaths.get('star_rating', {}).get('xpath'))
+            star_rating = data_extractor.extract_rating(star_rating_raw, self.account_name)
 
-                        # 페이지 스크롤 (시도할 때마다 조금씩 다른 위치로)
-                        scroll_distance = 800 + (attempt * 300)
-                        self.driver.execute_script(f"window.scrollTo(0, {scroll_distance});")
-                        time.sleep(1)
+            count_of_star_ratings = data_extractor.extract_star_ratings_count(
+                tree,
+                count_of_reviews,
+                self.xpaths.get('count_of_star_ratings', {}).get('xpath'),
+                self.account_name
+            )
 
-                        # Specs 버튼 찾기 (짧은 타임아웃)
-                        specs_button = WebDriverWait(self.driver, 5).until(
-                            EC.element_to_be_clickable((By.XPATH, specs_button_xpath))
-                        )
+            # 기타 필드 추출
+            trade_in = self.extract_with_fallback(tree, self.xpaths.get('trade_in', {}).get('xpath'))
+            top_mentions = self.extract_with_fallback(tree, self.xpaths.get('top_mentions', {}).get('xpath'))
+            recommendation_intent = self.extract_with_fallback(tree, self.xpaths.get('recommendation_intent', {}).get('xpath'))
 
-                        # 버튼이 화면에 보이도록 추가 스크롤
-                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", specs_button)
-                        time.sleep(1)
-
-                        print(f"[INFO] Specs button found, clicking to open modal")
-                        specs_button.click()
-                        specs_button_found = True
-                        break  # 성공하면 루프 종료
-
-                    except Exception as e:
-                        print(f"[WARNING] Attempt {attempt}/3 failed: {e}")
-                        if attempt == 3:
-                            print(f"[WARNING] Could not find specs button after 3 attempts, skipping HHP specs extraction")
-                        else:
-                            time.sleep(1)  # 다음 시도 전 대기
-
-                # 버튼을 찾았을 때만 모달 처리
-                if specs_button_found:
-                    try:
-                        # 모달이 완전히 로드될 때까지 대기 (carrier/storage/color 중 하나라도 나타날 때까지)
-                        try:
-                            WebDriverWait(self.driver, 10).until(
-                                lambda driver: driver.find_elements(By.XPATH, self.xpaths.get('hhp_carrier', {}).get('xpath', '//dummy')) or
-                                               driver.find_elements(By.XPATH, self.xpaths.get('hhp_storage', {}).get('xpath', '//dummy')) or
-                                               driver.find_elements(By.XPATH, self.xpaths.get('hhp_color', {}).get('xpath', '//dummy'))
-                            )
-                            print(f"[INFO] Specs modal fully loaded")
-                        except Exception:
-                            print(f"[WARNING] Timeout waiting for specs modal, proceeding anyway...")
-                            time.sleep(2)
-
-                        # 모달 HTML 파싱 (별도 변수 사용)
-                        modal_html = self.driver.page_source
-                        modal_tree = html.fromstring(modal_html)
-
-                        # 모달에서 스펙 추출
-                        hhp_carrier = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
-                        hhp_storage = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
-                        hhp_color = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_color', {}).get('xpath'))
-
-                        print(f"[INFO] Extracted specs - Carrier: {hhp_carrier}, Storage: {hhp_storage}, Color: {hhp_color}")
-
-                        # 스펙 모달창 닫기 (닫기 버튼 클릭)
-                        try:
-                            # data-testid="brix-sheet-closeButton" 또는 aria-label="Close Sheet"로 닫기 버튼 찾기
-                            close_button_xpath = "//button[@data-testid='brix-sheet-closeButton' or @aria-label='Close Sheet']"
-                            close_button = WebDriverWait(self.driver, 5).until(
-                                EC.element_to_be_clickable((By.XPATH, close_button_xpath))
-                            )
-                            close_button.click()
-                            time.sleep(1)  # 모달이 닫힐 때까지 짧은 대기
-                            print(f"[INFO] Closed specs modal")
-                        except Exception as close_error:
-                            print(f"[WARNING] Failed to close specs modal: {close_error}")
-                            # 닫기 버튼 클릭 실패 시 ESC 키 시도
-                            try:
-                                from selenium.webdriver.common.keys import Keys
-                                self.driver.find_element("tag name", "body").send_keys(Keys.ESCAPE)
-                                time.sleep(1)
-                                print(f"[INFO] Closed specs modal using ESC key")
-                            except Exception:
-                                print(f"[WARNING] Could not close modal, proceeding anyway...")
-
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract specs from modal: {e}")
-
+            # ========== 4단계: 리뷰 더보기 버튼 클릭 및 상세 리뷰 추출 ==========
             # 리뷰 데이터 추출: "See All Customer Reviews" 버튼 클릭 후 추출
             detailed_review_content = None
             reviews_button_xpath = self.xpaths.get('reviews_button', {}).get('xpath')
+
+            print(f"[DEBUG] reviews_button_xpath: {reviews_button_xpath}")
+
             if reviews_button_xpath:
                 review_button_found = False
 
@@ -582,41 +487,58 @@ class BestBuyDetailCrawler(BaseCrawler):
 
                 print(f"[INFO] Page height: {scroll_height}px, starting scroll search...")
 
+                # TV 크롤러처럼 여러 XPath 시도
+                reviews_button_xpaths = [
+                    reviews_button_xpath,
+                    '//button[contains(., "See All Customer Reviews")]',
+                    '//a[contains(., "See All Customer Reviews")]',
+                    '//button[contains(@class, "Op9coqeII1kYHR9Q")]',
+                    '//a[contains(text(), "reviews")]'
+                ]
+
                 # 페이지 끝까지 스크롤하면서 리뷰 버튼 찾기
                 while current_position < scroll_height:
-                    try:
-                        # 현재 위치에서 리뷰 버튼 찾기 시도
-                        review_button = self.driver.find_element(By.XPATH, reviews_button_xpath)
-
-                        # 버튼을 찾았으면 화면 중앙으로 스크롤
-                        print(f"[INFO] Review button found at {current_position}px")
-                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", review_button)
-                        time.sleep(2)
-
-                        # JavaScript로 클릭 시도
+                    # 각 스크롤 위치에서 여러 XPath 시도 (TV 크롤러 방식)
+                    for xpath in reviews_button_xpaths:
                         try:
-                            self.driver.execute_script("arguments[0].click();", review_button)
-                            print(f"[INFO] Review button clicked successfully (JS)")
-                            review_button_found = True
-                            time.sleep(5)  # 리뷰 페이지 로딩 대기
-                            break
-                        except Exception as click_err:
-                            print(f"[WARNING] JS click failed: {click_err}, trying normal click")
-                            # 일반 클릭 시도
-                            review_button.click()
-                            print(f"[INFO] Review button clicked successfully (normal)")
-                            review_button_found = True
-                            time.sleep(5)
-                            break
+                            # 현재 위치에서 리뷰 버튼 찾기 시도
+                            review_button = self.driver.find_element(By.XPATH, xpath)
 
-                    except Exception as e:
-                        # 버튼을 못 찾았으면 계속 스크롤
-                        if "no such element" not in str(e).lower():
-                            print(f"[DEBUG] Button search error: {e}")
+                            # 버튼을 찾았으면 화면 중앙으로 스크롤
+                            print(f"[INFO] Review button found at {current_position}px with xpath: {xpath[:50]}...")
+                            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", review_button)
+                            time.sleep(2)
 
-                        current_position += scroll_step
-                        self.driver.execute_script(f"window.scrollTo(0, {current_position});")
-                        time.sleep(0.5)
+                            # JavaScript로 클릭 시도
+                            try:
+                                self.driver.execute_script("arguments[0].click();", review_button)
+                                print(f"[INFO] Review button clicked successfully (JS)")
+                                review_button_found = True
+                                time.sleep(5)  # 리뷰 페이지 로딩 대기
+                                break
+                            except Exception as click_err:
+                                print(f"[WARNING] JS click failed: {click_err}, trying normal click")
+                                # 일반 클릭 시도
+                                review_button.click()
+                                print(f"[INFO] Review button clicked successfully (normal)")
+                                review_button_found = True
+                                time.sleep(5)
+                                break
+
+                        except Exception as e:
+                            # 이 xpath로 못 찾으면 다음 xpath 시도
+                            if "no such element" not in str(e).lower():
+                                print(f"[DEBUG] XPath {xpath[:30]}... failed: {e}")
+                            continue
+
+                    # 버튼을 찾았으면 전체 루프 종료
+                    if review_button_found:
+                        break
+
+                    # 못 찾았으면 계속 스크롤
+                    current_position += scroll_step
+                    self.driver.execute_script(f"window.scrollTo(0, {current_position});")
+                    time.sleep(0.5)
 
                 if not review_button_found:
                     print(f"[WARNING] Could not find review button after scrolling entire page, skipping review extraction")
