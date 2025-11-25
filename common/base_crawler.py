@@ -152,6 +152,9 @@ class BaseCrawler:
         # User-Agent 고정 (일관된 결과를 위해)
         chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
+        # 전체화면으로 시작
+        chrome_options.add_argument('--start-maximized')
+
         # 추가 안정화 옵션
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--no-sandbox')

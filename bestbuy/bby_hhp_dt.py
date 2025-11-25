@@ -320,7 +320,6 @@ class BestBuyDetailCrawler(BaseCrawler):
             # ========== 2단계: 유사 제품 추출 (스크롤해서 찾기) ==========
             similar_products_container_xpath = self.xpaths.get('similar_products_container', {}).get('xpath')
 
-            similar_products_data = []  # [{name, pros, cons, url}, ...]
             retailer_sku_name_similar = None
 
             if similar_products_container_xpath:
@@ -375,97 +374,28 @@ class BestBuyDetailCrawler(BaseCrawler):
                     # XPath 미리 가져오기
                     similar_product_xpath = self.xpaths.get('similar_product', {}).get('xpath')
                     name_xpath = self.xpaths.get('similar_product_name', {}).get('xpath')
-                    url_xpath = self.xpaths.get('similar_product_url', {}).get('xpath')
-                    pros_xpath = self.xpaths.get('pros', {}).get('xpath')
-                    cons_xpath = self.xpaths.get('cons', {}).get('xpath')
 
                     print(f"[DEBUG] similar_product xpath: {similar_product_xpath}")
                     print(f"[DEBUG] similar_product_name xpath: {name_xpath}")
-                    print(f"[DEBUG] similar_product_url xpath: {url_xpath}")
-                    print(f"[DEBUG] pros xpath: {pros_xpath}")
-                    print(f"[DEBUG] cons xpath: {cons_xpath}")
 
-                    # 1단계: 전체 섹션에서 각 개별 제품 컨테이너 찾기
-                    # similar_section은 여러 요소를 반환할 수 있으므로 전체 tree에서 다시 찾기
+                    # 전체 섹션에서 각 개별 제품 컨테이너 찾기
                     if similar_product_xpath:
-                        # tree 전체에서 similar_products_container 하위의 individual products 찾기
                         full_xpath = f"{similar_products_container_xpath}{similar_product_xpath}"
                         individual_containers = tree.xpath(full_xpath)
-                        print(f"[DEBUG] Using combined XPath: {full_xpath}")
-                    else:
-                        individual_containers = []
+                        print(f"[DEBUG] Found {len(individual_containers)} individual product containers")
 
-                    print(f"[DEBUG] Found {len(individual_containers)} individual product containers")
+                        # 각 제품 컨테이너에서 제품명만 추출
+                        for idx, container in enumerate(individual_containers, 1):
+                            if name_xpath:
+                                name_results = container.xpath(name_xpath)
+                                if name_results:
+                                    name = name_results[0]
+                                    similar_product_names.append(name)
+                                    print(f"[DEBUG] Product {idx} name: {name}")
+                                else:
+                                    print(f"[WARNING] Product {idx}: name xpath returned empty")
 
-                    # 2단계: 각 제품 컨테이너에서 제품명과 URL 추출
-                    products_basic_info = []
-
-                    for idx, container in enumerate(individual_containers, 1):
-                        # 제품명 추출
-                        name = None
-                        if name_xpath:
-                            name_results = container.xpath(name_xpath)
-                            if name_results:
-                                name = name_results[0]
-                                print(f"[DEBUG] Product {idx} name: {name}")
-                            else:
-                                print(f"[WARNING] Product {idx}: name xpath returned empty")
-
-                        # URL 추출
-                        similar_product_url = None
-                        if url_xpath:
-                            url_results = container.xpath(url_xpath)
-                            if url_results:
-                                similar_product_url = url_results[0]
-                                print(f"[DEBUG] Product {idx} URL: {similar_product_url}")
-                            else:
-                                print(f"[WARNING] Product {idx}: URL xpath returned empty")
-
-                        if name:
-                            products_basic_info.append({
-                                'name': name,
-                                'url': similar_product_url
-                            })
-                            similar_product_names.append(name)
-                        else:
-                            print(f"[WARNING] Product {idx}: skipping due to missing name")
-
-                    print(f"[INFO] Extracted {len(products_basic_info)} products with name/url")
-
-                    # 2단계: Pros/Cons 테이블에서 추출 (tr[2]와 tr[4]에서 모든 td 추출)
-                    pros_texts = []
-                    cons_texts = []
-
-                    try:
-                        if pros_xpath and pros_xpath.strip():
-                            pros_texts = tree.xpath(pros_xpath)
-                            print(f"[DEBUG] Found {len(pros_texts)} pros texts from table")
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract pros: {e}")
-
-                    try:
-                        if cons_xpath and cons_xpath.strip():
-                            cons_texts = tree.xpath(cons_xpath)
-                            print(f"[DEBUG] Found {len(cons_texts)} cons texts from table")
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract cons: {e}")
-
-                    # 3단계: 제품명/URL과 Pros/Cons를 순서대로 매칭
-                    for idx, product_info in enumerate(products_basic_info):
-                        # 해당 인덱스의 pros와 cons 가져오기
-                        pros_text = pros_texts[idx] if idx < len(pros_texts) else None
-                        cons_text = cons_texts[idx] if idx < len(cons_texts) else None
-
-                        print(f"[DEBUG] Product {idx+1} - Pros: {pros_text}")
-                        print(f"[DEBUG] Product {idx+1} - Cons: {cons_text}")
-
-                        # 유사 제품 데이터 저장 (pros/cons는 쉼표로 구분된 문자열)
-                        similar_products_data.append({
-                            'name': product_info['name'],
-                            'pros': pros_text if pros_text else None,  # 문자열로 저장
-                            'cons': cons_text if cons_text else None,  # 문자열로 저장
-                            'url': product_info['url']
-                        })
+                    print(f"[INFO] Extracted {len(similar_product_names)} similar product names")
 
                     # 모든 유사 제품명을 ||| 구분자로 연결
                     retailer_sku_name_similar = '|||'.join(similar_product_names) if similar_product_names else None
@@ -624,8 +554,7 @@ class BestBuyDetailCrawler(BaseCrawler):
                 'hhp_carrier': hhp_carrier[:200] if hhp_carrier else None,
                 'detailed_review_content': detailed_review_content,
                 'top_mentions': top_mentions,
-                'retailer_sku_name_similar': retailer_sku_name_similar,
-                'similar_products_data': similar_products_data  # 각 유사 제품 객체 리스트
+                'retailer_sku_name_similar': retailer_sku_name_similar
             })
 
             return combined_data
@@ -725,15 +654,6 @@ class BestBuyDetailCrawler(BaseCrawler):
                     print(f"[DEBUG] Main product inserted successfully")
                     saved_count += 1
 
-                    # 제품 저장 후 바로 유사 제품 데이터를 bby_hhp_mst에 저장
-                    similar_products_data = product.get('similar_products_data', [])
-                    if similar_products_data:
-                        print(f"[DEBUG] Saving {len(similar_products_data)} similar products to MST")
-                        similar_saved = self._save_similar_products_to_mst(cursor, product, current_time)
-                        print(f"[DEBUG] Saved {similar_saved} similar products to MST")
-                    else:
-                        print(f"[DEBUG] No similar products data to save")
-
                 except Exception as product_error:
                     print(f"[ERROR] Failed to save product {product.get('retailer_sku_name', 'N/A')}: {product_error}")
                     traceback.print_exc()
@@ -754,150 +674,6 @@ class BestBuyDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to save products (outer exception): {e}")
-            traceback.print_exc()
-            self.db_conn.rollback()
-            return 0
-
-    def _save_similar_products_to_mst(self, cursor, product, current_time):
-        """
-        bby_hhp_mst 테이블에 유사 제품 저장 (내부 헬퍼 메서드)
-
-        Args:
-            cursor: DB cursor 객체
-            product (dict): 제품 데이터
-            current_time (str): 현재 시간
-
-        Returns: int: 저장된 행 수
-        """
-        try:
-            insert_query = """
-                INSERT INTO bby_hhp_mst (
-                    account_name, retailer_sku_name, item,
-                    retailer_sku_name_similar, pros, cons,
-                    origin_product_url, product_url,
-                    calendar_week, crawl_strdatetime
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-            """
-
-            saved_count = 0
-            similar_products_data = product.get('similar_products_data', [])
-
-            # 각 유사 제품을 별도 행으로 저장
-            for idx, similar_product in enumerate(similar_products_data, 1):
-                try:
-                    # Pros/Cons는 이미 문자열로 저장되어 있음 (쉼표로 구분된 형태)
-                    pros_str = similar_product.get('pros')
-                    cons_str = similar_product.get('cons')
-
-                    print(f"[DEBUG] MST - Inserting similar product {idx}/{len(similar_products_data)}: {similar_product.get('name', 'N/A')[:50]}")
-                    print(f"[DEBUG] MST - Pros: {pros_str}")
-                    print(f"[DEBUG] MST - Cons: {cons_str}")
-
-                    cursor.execute(insert_query, (
-                        self.account_name,
-                        product.get('retailer_sku_name'),  # 원본 제품명
-                        product.get('item'),                # 원본 제품 item
-                        similar_product.get('name'),        # 유사 제품명
-                        pros_str,                           # Pros (쉼표 구분 문자열)
-                        cons_str,                           # Cons (쉼표 구분 문자열)
-                        product.get('product_url'),         # 원본 제품 URL
-                        similar_product.get('url'),         # 유사 제품 URL
-                        product.get('calendar_week'),
-                        current_time
-                    ))
-                    saved_count += 1
-                    print(f"[DEBUG] MST - Similar product {idx} inserted successfully")
-
-                except Exception as similar_error:
-                    print(f"[ERROR] Failed to save similar product {idx}: {similar_error}")
-                    traceback.print_exc()
-                    # 유사 제품 하나 실패 시 전체 실패로 처리 (트랜잭션 일관성)
-                    raise
-
-            return saved_count
-
-        except Exception as e:
-            print(f"[ERROR] Failed to save similar products to bby_hhp_mst: {e}")
-            traceback.print_exc()
-            # 에러를 상위로 전파하여 메인 제품 저장도 롤백되도록 함
-            raise
-
-    def save_to_mst(self, products):
-        """
-        bby_hhp_mst 테이블에 저장 (Similar Products, Pros/Cons 비교 데이터) - DEPRECATED
-
-        각 유사 제품을 별도 행으로 저장:
-        - retailer_sku_name: 원본 제품명
-        - retailer_sku_name_similar: 유사 제품명
-        - pros: 해당 유사 제품의 Pros 리스트 (||| 구분자로 연결)
-        - cons: 해당 유사 제품의 Cons 리스트 (||| 구분자로 연결)
-        - similar_product_url: 유사 제품의 URL
-
-        Args: products (list): 제품 데이터 리스트
-
-        Returns: int: 저장된 행 수
-        """
-        if not products:
-            return 0
-
-        try:
-            cursor = self.db_conn.cursor()
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-            insert_query = """
-                INSERT INTO bby_hhp_mst (
-                    account_name, retailer_sku_name, item,
-                    retailer_sku_name_similar, pros, cons,
-                    product_url, similar_product_url,
-                    calendar_week, crawl_strdatetime
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-            """
-
-            saved_count = 0
-
-            for product in products:
-                similar_products_data = product.get('similar_products_data', [])
-
-                if similar_products_data:
-                    # 각 유사 제품을 별도 행으로 저장
-                    for similar_product in similar_products_data:
-                        # Pros/Cons 리스트를 ||| 구분자로 연결
-                        pros_list = similar_product.get('pros', [])
-                        cons_list = similar_product.get('cons', [])
-
-                        pros_str = '|||'.join(pros_list) if pros_list else None
-                        cons_str = '|||'.join(cons_list) if cons_list else None
-
-                        cursor.execute(insert_query, (
-                            self.account_name,
-                            product.get('retailer_sku_name'),  # 원본 제품명
-                            product.get('item'),                # 원본 제품 item
-                            similar_product.get('name'),        # 유사 제품명
-                            pros_str,                           # Pros (||| 구분자)
-                            cons_str,                           # Cons (||| 구분자)
-                            product.get('product_url'),         # 원본 제품 URL
-                            similar_product.get('url'),         # 유사 제품 URL
-                            product.get('calendar_week'),
-                            current_time
-                        ))
-                        saved_count += 1
-
-            self.db_conn.commit()
-            cursor.close()
-
-            if saved_count > 0:
-                print(f"[SUCCESS] Saved {saved_count} similar products to bby_hhp_mst")
-            else:
-                print(f"[INFO] No similar products data to save to bby_hhp_mst")
-
-            return saved_count
-
-        except Exception as e:
-            print(f"[ERROR] Failed to save to bby_hhp_mst: {e}")
             traceback.print_exc()
             self.db_conn.rollback()
             return 0
