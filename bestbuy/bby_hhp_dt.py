@@ -240,20 +240,18 @@ class BestBuyDetailCrawler(BaseCrawler):
 
                     last_html_length = current_html_length
 
-                # 4단계: 주요 요소들이 로드되었는지 확인
+                # 4단계: 주요 요소들이 로드되었는지 확인 (페이지 상단 요소만)
                 print("[INFO] Verifying key elements are loaded...")
                 star_rating_xpath = self.xpaths.get('star_rating', {}).get('xpath')
                 count_of_reviews_xpath = self.xpaths.get('count_of_reviews', {}).get('xpath')
                 count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
-                similar_products_container_xpath = self.xpaths.get('similar_products_container', {}).get('xpath')
                 recommendation_intent_xpath = self.xpaths.get('recommendation_intent', {}).get('xpath')
 
-                WebDriverWait(self.driver, 30).until(
+                WebDriverWait(self.driver, 90).until(
                     lambda driver: (
                         (driver.find_elements(By.XPATH, star_rating_xpath) if star_rating_xpath else True) and
                         (driver.find_elements(By.XPATH, count_of_reviews_xpath) if count_of_reviews_xpath else True) and
                         (driver.find_elements(By.XPATH, count_of_star_ratings_xpath) if count_of_star_ratings_xpath else True) and
-                        (driver.find_elements(By.XPATH, similar_products_container_xpath) if similar_products_container_xpath else True) and
                         (driver.find_elements(By.XPATH, recommendation_intent_xpath) if recommendation_intent_xpath else True)
                     )
                 )
@@ -298,6 +296,46 @@ class BestBuyDetailCrawler(BaseCrawler):
             retailer_sku_name_similar = None
 
             if similar_products_container_xpath:
+                # 유사 제품은 페이지 중간(스펙 아래)에 있으므로 현재 위치에서 스크롤하면서 찾기
+                print("[INFO] Scrolling to find similar products section...")
+                similar_products_found = False
+
+                try:
+                    # 현재 스크롤 위치 저장
+                    current_scroll = self.driver.execute_script("return window.pageYOffset;")
+
+                    # 최대 10번 시도 (300px씩)
+                    max_attempts = 10
+                    scroll_step = 300
+
+                    for attempt in range(max_attempts):
+                        try:
+                            # 유사 제품 컨테이너 찾기 시도 (짧은 타임아웃)
+                            similar_element = WebDriverWait(self.driver, 5).until(
+                                lambda driver: driver.find_elements(By.XPATH, similar_products_container_xpath)
+                            )
+
+                            if similar_element:
+                                print(f"[INFO] Similar products section found at scroll position {current_scroll}px")
+                                similar_products_found = True
+                                break
+                        except Exception:
+                            # 못 찾았으면 300px 아래로 스크롤
+                            current_scroll += scroll_step
+                            self.driver.execute_script(f"window.scrollTo(0, {current_scroll});")
+                            time.sleep(0.5)  # 짧은 대기
+
+                    if similar_products_found:
+                        # HTML 다시 파싱 (스크롤 후 업데이트된 DOM)
+                        time.sleep(1)  # 최종 안정화 대기
+                        page_html = self.driver.page_source
+                        tree = html.fromstring(page_html)
+                    else:
+                        print(f"[WARNING] Could not find similar products section after {max_attempts} scroll attempts")
+
+                except Exception as e:
+                    print(f"[WARNING] Error while searching for similar products section: {e}")
+
                 # 각 유사 제품 컨테이너 (카드) 추출
                 similar_product_containers = tree.xpath(similar_products_container_xpath)
 
