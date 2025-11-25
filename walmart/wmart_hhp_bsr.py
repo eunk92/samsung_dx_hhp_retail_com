@@ -431,6 +431,12 @@ class WalmartBSRCrawler(BaseCrawler):
                     membership_discounts_raw = self.extract_with_fallback(item, self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
                     retailer_membership_discounts = f"{membership_discounts_raw} W+" if membership_discounts_raw else None
 
+                    # sku_status1, sku_status2 추출 및 결합
+                    sku_status_1 = self.extract_with_fallback(item, self.xpaths.get('sku_status_1', {}).get('xpath'))
+                    sku_status_2 = self.extract_with_fallback(item, self.xpaths.get('sku_status_2', {}).get('xpath'))
+                    sku_status_parts = [s for s in [sku_status_1, sku_status_2] if s]
+                    sku_status = ', '.join(sku_status_parts) if sku_status_parts else None
+
                     product_data = {
                         'account_name': self.account_name,
                         'page_type': self.page_type,
@@ -441,7 +447,7 @@ class WalmartBSRCrawler(BaseCrawler):
                         'pick_up_availability': self.extract_with_fallback(item, self.xpaths.get('pick_up_availability', {}).get('xpath')),
                         'shipping_availability': self.extract_with_fallback(item, self.xpaths.get('shipping_availability', {}).get('xpath')),
                         'delivery_availability': self.extract_with_fallback(item, self.xpaths.get('delivery_availability', {}).get('xpath')),
-                        'sku_status': self.extract_with_fallback(item, self.xpaths.get('sku_status', {}).get('xpath')),
+                        'sku_status': sku_status,
                         'retailer_membership_discounts': retailer_membership_discounts,
                         'available_quantity_for_purchase': self.extract_with_fallback(item, self.xpaths.get('available_quantity_for_purchase', {}).get('xpath')),
                         'inventory_status': self.extract_with_fallback(item, self.xpaths.get('inventory_status', {}).get('xpath')),
