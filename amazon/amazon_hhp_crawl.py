@@ -117,7 +117,7 @@ class AmazonIntegratedCrawler:
             print("STEP 3: Detail Crawler (All Products)")
             print("="*80 + "\n")
 
-            detail_crawler = AmazonDetailCrawler(batch_id=self.batch_id)
+            detail_crawler = AmazonDetailCrawler(test_mode=False, batch_id=self.batch_id)
             detail_success = detail_crawler.run()
 
             if not detail_success:

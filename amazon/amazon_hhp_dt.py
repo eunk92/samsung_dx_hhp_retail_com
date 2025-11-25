@@ -239,9 +239,7 @@ class AmazonDetailCrawler(BaseCrawler):
                     continue
 
             if not captcha_button:
-                print("[WARNING] CAPTCHA keywords found but element not located")
-                print("[INFO] Waiting 45 seconds for manual intervention...")
-                time.sleep(45)
+                print("[WARNING] CAPTCHA keywords found but element not located - proceeding anyway")
                 return True
 
             # 텍스트 입력형 CAPTCHA (수동 입력 필요)
@@ -809,7 +807,7 @@ class AmazonDetailCrawler(BaseCrawler):
                     self.save_cookies(self.account_name)
                     self.cookies_loaded = True
 
-                # 1개 제품마다 즉시 DB에 저장 (리뷰 데이터가 클 수 있어 메모리 효율)
+                # 1개 제품마다 즉시 DB에 저장 (리뷰 데이터가 �� 수 있어 메모리 효율)
                 saved_count = self.save_to_retail_com([combined_data])
                 total_saved += saved_count
 
