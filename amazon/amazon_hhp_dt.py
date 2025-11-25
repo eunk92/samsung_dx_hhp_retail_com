@@ -443,7 +443,24 @@ class AmazonDetailCrawler(BaseCrawler):
             except Exception as e:
                 print(f"[WARNING] Failed to extract hhp_carrier: {e}")
 
-            # === "Additional details" 버튼 클릭하여 색상/용량 정보 확장 ===
+            try:
+                # 기타 상세 정보
+                sku_popularity = self.extract_with_fallback(tree, self.xpaths.get('sku_popularity', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract sku_popularity: {e}")
+
+            try:
+                bundle = self.extract_with_fallback(tree, self.xpaths.get('bundle', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract bundle: {e}")
+
+            try:
+                retailer_membership_discounts = self.extract_with_fallback(tree, self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract retailer_membership_discounts: {e}")
+
+            # === "Additional details" + "Item details" 버튼 클릭하여 정보 확장 ===
+            additional_details_found = False
             try:
                 # 페이지 아래로 스크롤 (Additional details 섹션까지)
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
@@ -461,40 +478,110 @@ class AmazonDetailCrawler(BaseCrawler):
                 # 클릭
                 expand_button.click()
                 time.sleep(1)  # 확장 애니메이션 대기
+                print(f"[INFO] 'Additional details' section expanded")
+                additional_details_found = True
+
+                # "Item details" 버튼도 클릭
+                try:
+                    item_details_button = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, "//span[contains(text(), 'Item details')]/ancestor::a"))
+                    )
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", item_details_button)
+                    time.sleep(1)
+                    item_details_button.click()
+                    time.sleep(1)
+                    print(f"[INFO] 'Item details' section expanded")
+                except Exception as e:
+                    print(f"[WARNING] Could not expand 'Item details': {e}")
 
                 # 확장 후 HTML 다시 파싱
                 page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
-                print(f"[INFO] 'Additional details' section expanded")
 
             except Exception as e:
                 print(f"[WARNING] Could not expand 'Additional details': {e}")
-                print(f"[INFO] Attempting to extract from static Product Information table as fallback...")
+                print(f"[INFO] Using fallback: static Product Information table...")
 
-            # === hhp_storage, hhp_color 추출 (fallback 로직 포함) ===
-            try:
-                # 먼저 기본 XPath로 시도 (Additional details 확장된 경우)
-                hhp_storage = self.extract_with_fallback(tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
+            # === hhp_storage, hhp_color, rank_1, rank_2 추출 ===
+            if additional_details_found:
+                # Additional details 확장된 경우: 기본 XPath로 추출
+                try:
+                    hhp_storage = self.extract_with_fallback(tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
+                except Exception as e:
+                    print(f"[WARNING] Failed to extract hhp_storage: {e}")
 
-                # 값이 없으면 fallback: 정적 Product Information 테이블에서 추출
-                if not hhp_storage:
-                    fallback_storage_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Memory Storage Capacity')]/following-sibling::td"
+                try:
+                    hhp_color = self.extract_with_fallback(tree, self.xpaths.get('hhp_color', {}).get('xpath'))
+                except Exception as e:
+                    print(f"[WARNING] Failed to extract hhp_color: {e}")
+
+                try:
+                    rank_1 = self.extract_with_fallback(tree, self.xpaths.get('rank_1', {}).get('xpath'))
+                except Exception as e:
+                    print(f"[WARNING] Failed to extract rank_1: {e}")
+
+                try:
+                    rank_2 = self.extract_with_fallback(tree, self.xpaths.get('rank_2', {}).get('xpath'))
+                except Exception as e:
+                    print(f"[WARNING] Failed to extract rank_2: {e}")
+            else:
+                # Fallback: 정적 Product Information 테이블에서 추출
+                try:
+                    fallback_storage_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Memory Storage Capacity')]/following-sibling::td/text()"
                     hhp_storage = self.extract_with_fallback(tree, fallback_storage_xpath)
                     if hhp_storage:
                         print(f"[INFO] hhp_storage extracted from fallback table: {hhp_storage}")
-            except Exception as e:
-                print(f"[WARNING] Failed to extract hhp_storage: {e}")
+                except Exception as e:
+                    print(f"[WARNING] Failed to extract hhp_storage (fallback): {e}")
 
-            try:
-                hhp_color = self.extract_with_fallback(tree, self.xpaths.get('hhp_color', {}).get('xpath'))
-
-                if not hhp_color:
-                    fallback_color_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Color')]/following-sibling::td"
+                try:
+                    fallback_color_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Color')]/following-sibling::td/text()"
                     hhp_color = self.extract_with_fallback(tree, fallback_color_xpath)
                     if hhp_color:
                         print(f"[INFO] hhp_color extracted from fallback table: {hhp_color}")
+                except Exception as e:
+                    print(f"[WARNING] Failed to extract hhp_color (fallback): {e}")
+
+                try:
+                    fallback_rank1_xpath = "//th[contains(text(), 'Best Sellers Rank')]/following-sibling::td//li[1]//span/text()"
+                    rank_1 = self.extract_with_fallback(tree, fallback_rank1_xpath)
+                    if rank_1:
+                        print(f"[INFO] rank_1 extracted from fallback table: {rank_1}")
+                except Exception as e:
+                    print(f"[WARNING] Failed to extract rank_1 (fallback): {e}")
+
+                try:
+                    fallback_rank2_xpath = "//th[contains(text(), 'Best Sellers Rank')]/following-sibling::td//li[2]//span/text()"
+                    rank_2 = self.extract_with_fallback(tree, fallback_rank2_xpath)
+                    if rank_2:
+                        print(f"[INFO] rank_2 extracted from fallback table: {rank_2}")
+                except Exception as e:
+                    print(f"[WARNING] Failed to extract rank_2 (fallback): {e}")
+
+
+            # === 리뷰 섹션으로 이동 (리뷰 링크 클릭) ===
+            try:
+                # 페이지 맨 위로 스크롤
+                self.driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(1)
+
+                # HTML 다시 파싱
+                page_html = self.driver.page_source
+                tree = html.fromstring(page_html)
+
+                # 리뷰 링크 클릭
+                review_link = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((By.ID, "acrCustomerReviewLink"))
+                )
+                review_link.click()
+                time.sleep(2)  # 리뷰 섹션 로딩 대기
+
+                # 리뷰 섹션 이동 후 HTML 다시 파싱
+                page_html = self.driver.page_source
+                tree = html.fromstring(page_html)
+                print(f"[INFO] Navigated to review section")
             except Exception as e:
-                print(f"[WARNING] Failed to extract hhp_color: {e}")
+                print(f"[WARNING] Could not navigate to review section: {e}")
 
             # === 리뷰수/별점/별점별리뷰수 데이터 추출 및 후처리 ===
             try:
@@ -524,32 +611,6 @@ class AmazonDetailCrawler(BaseCrawler):
                 summarized_review_content = self.extract_with_fallback(tree, self.xpaths.get('summarized_review_content', {}).get('xpath'))
             except Exception as e:
                 print(f"[WARNING] Failed to extract summarized_review_content: {e}")
-
-            try:
-                # 기타 상세 정보
-                sku_popularity = self.extract_with_fallback(tree, self.xpaths.get('sku_popularity', {}).get('xpath'))
-            except Exception as e:
-                print(f"[WARNING] Failed to extract sku_popularity: {e}")
-
-            try:
-                bundle = self.extract_with_fallback(tree, self.xpaths.get('bundle', {}).get('xpath'))
-            except Exception as e:
-                print(f"[WARNING] Failed to extract bundle: {e}")
-
-            try:
-                retailer_membership_discounts = self.extract_with_fallback(tree, self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
-            except Exception as e:
-                print(f"[WARNING] Failed to extract retailer_membership_discounts: {e}")
-
-            try:
-                rank_1 = self.extract_with_fallback(tree, self.xpaths.get('rank_1', {}).get('xpath'))
-            except Exception as e:
-                print(f"[WARNING] Failed to extract rank_1: {e}")
-
-            try:
-                rank_2 = self.extract_with_fallback(tree, self.xpaths.get('rank_2', {}).get('xpath'))
-            except Exception as e:
-                print(f"[WARNING] Failed to extract rank_2: {e}")
 
             print(f"[INFO] Detail page extraction completed")
 
@@ -636,7 +697,8 @@ class AmazonDetailCrawler(BaseCrawler):
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Detail 크롤러 실행 시점
 
             for product in products:
-                cursor.execute(insert_query, (
+                # 디버그: 실제 저장되는 값 출력
+                values = (
                     # Detail 페이지에서 추출한 필드
                     product.get('country'),
                     product.get('product'),
@@ -671,7 +733,13 @@ class AmazonDetailCrawler(BaseCrawler):
                     product.get('calendar_week'),
                     current_time,  # Detail 크롤러 실행 시점의 현재 시간 사용
                     product.get('batch_id')  # 배치 ID
-                ))
+                )
+
+                print(f"\n[DEBUG] VALUES being inserted:")
+                for i, val in enumerate(values, 1):
+                    print(f"  [{i}] {val}")
+
+                cursor.execute(insert_query, values)
                 saved_count += 1
 
             self.db_conn.commit()
