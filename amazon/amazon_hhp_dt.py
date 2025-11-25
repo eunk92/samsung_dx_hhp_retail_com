@@ -495,7 +495,8 @@ class AmazonDetailCrawler(BaseCrawler):
             print(f"[INFO] Detail page extraction completed")
 
             # === STEP 2: 리뷰 페이지로 이동하여 detailed_review_content 추출 ===
-            detailed_review_content = self.extract_reviews(item, max_reviews=20) if item else None
+            #detailed_review_content = self.extract_reviews(item, max_reviews=20) if item else None
+            detailed_review_content = None
 
             # Detail 페이지에서 추출할 필드 (hhp_retail_com 테이블 구조 기준)
             detail_data = {
