@@ -205,7 +205,7 @@ class WalmartMainCrawler(BaseCrawler):
 
             # 컨텍스트 생성
             self.context = self.browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
+                viewport=None,  # None으로 설정하여 --start-maximized 옵션 활성화
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                 locale='en-US'
             )
@@ -352,6 +352,8 @@ class WalmartMainCrawler(BaseCrawler):
                 if not self.handle_captcha():
                     print("[WARNING] CAPTCHA handling failed")
 
+                # CAPTCHA 해결 후 페이지 재로드 대기 (제품 목록 로딩 시간 확보)
+                print("[INFO] Waiting for page to reload products after CAPTCHA...")
                 time.sleep(random.uniform(3, 5))
 
             # HTML 파싱
@@ -389,6 +391,10 @@ class WalmartMainCrawler(BaseCrawler):
                     final_price_raw = item.xpath(final_price_xpath) if final_price_xpath else None
                     final_sku_price = self.format_walmart_price(final_price_raw)
 
+                    # retailer_membership_discounts 추출 및 "W+" 결합
+                    membership_discounts_raw = self.extract_with_fallback(item, self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
+                    retailer_membership_discounts = f"{membership_discounts_raw} W+" if membership_discounts_raw else None
+
                     product_data = {
                         'account_name': self.account_name,
                         'page_type': self.page_type,
@@ -400,7 +406,7 @@ class WalmartMainCrawler(BaseCrawler):
                         'shipping_availability': self.extract_with_fallback(item, self.xpaths.get('shipping_availability', {}).get('xpath')),
                         'delivery_availability': self.extract_with_fallback(item, self.xpaths.get('delivery_availability', {}).get('xpath')),
                         'sku_status': self.extract_with_fallback(item, self.xpaths.get('sku_status', {}).get('xpath')),
-                        'retailer_membership_discounts': self.extract_with_fallback(item, self.xpaths.get('retailer_membership_discounts', {}).get('xpath')),
+                        'retailer_membership_discounts': retailer_membership_discounts,
                         'available_quantity_for_purchase': self.extract_with_fallback(item, self.xpaths.get('available_quantity_for_purchase', {}).get('xpath')),
                         'inventory_status': self.extract_with_fallback(item, self.xpaths.get('inventory_status', {}).get('xpath')),
                         'main_rank': self.current_rank,
