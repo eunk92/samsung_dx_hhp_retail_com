@@ -1,31 +1,35 @@
 """
-Walmart Main 페이지 크롤러
+Walmart Main 페이지 크롤러 (Playwright 기반)
 - 개별 실행: test_mode=True (기본값)
 - 통합 크롤러: test_mode 및 batch_id를 파라미터로 전달
 - Main 페이지에서 제품 리스트 수집 (main_rank 자동 계산)
 - main_rank는 페이지 관계없이 1부터 순차 증가
 - 테스트 모드: 1개 제품만 수집
 - 운영 모드: 최대 300개 제품까지 수집
+- CAPTCHA 자동 해결 기능 포함
 """
 
 import sys
 import os
 import time
 import traceback
+import random
+import psycopg2
 from datetime import datetime
 from lxml import html
+from playwright.sync_api import sync_playwright
 
-# 공통 환경 설정 (작업 디렉토리, 한글 출력, 경로 설정)
+# 공통 환경 설정
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.setup import setup_environment
 setup_environment(__file__)
 
-from common.base_crawler import BaseCrawler
+from config import DB_CONFIG
 
 
-class WalmartMainCrawler(BaseCrawler):
+class WalmartMainCrawler:
     """
-    Walmart Main 페이지 크롤러
+    Walmart Main 페이지 크롤러 (Playwright 기반)
     """
 
     def __init__(self, test_mode=True, batch_id=None):
@@ -36,13 +40,22 @@ class WalmartMainCrawler(BaseCrawler):
             test_mode (bool): 테스트 모드 (기본값: True)
             batch_id (str): 배치 ID (기본값: None)
         """
-        super().__init__()
         self.test_mode = test_mode
         self.account_name = 'Walmart'
         self.page_type = 'main'
         self.batch_id = batch_id
         self.calendar_week = None
         self.url_template = None
+
+        # Playwright 객체
+        self.playwright = None
+        self.browser = None
+        self.context = None
+        self.page = None
+
+        # DB 연결
+        self.db_conn = None
+        self.xpaths = {}
 
         # 테스트 설정
         self.test_count = 1
@@ -51,67 +64,228 @@ class WalmartMainCrawler(BaseCrawler):
         self.max_products = 300
         self.current_rank = 0
 
-    def initialize(self):
-        """
-        크롤러 초기화 작업
-
-        Returns: bool: 초기화 성공 시 True, 실패 시 False
-        """
-        print("\n" + "="*60)
-        print(f"[INFO] Walmart Main Crawler Initialization")
-        print(f"[INFO] Test Mode: {'ON (1 product)' if self.test_mode else 'OFF (max 300 products)'}")
-        print("="*60 + "\n")
-
-        # 1. DB 연결
-        if not self.connect_db():
+    def connect_db(self):
+        """DB 연결"""
+        try:
+            self.db_conn = psycopg2.connect(**DB_CONFIG)
+            print("[OK] Database connected")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Database connection failed: {e}")
             return False
 
-        # 2. XPath 셀렉터 로드
-        if not self.load_xpaths(self.account_name, self.page_type):
+    def load_xpaths(self):
+        """XPath 셀렉터 로드"""
+        try:
+            cursor = self.db_conn.cursor()
+            cursor.execute("""
+                SELECT field_name, xpath
+                FROM hhp_xpath_selectors
+                WHERE account_name = %s AND page_type = %s
+            """, (self.account_name, self.page_type))
+
+            for row in cursor.fetchall():
+                self.xpaths[row[0]] = {'xpath': row[1]}
+
+            cursor.close()
+            print(f"[OK] Loaded {len(self.xpaths)} XPath selectors")
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] Failed to load XPaths: {e}")
             return False
 
-        # 3. URL 템플릿 로드
-        self.url_template = self.load_page_urls(self.account_name, self.page_type)
-        if not self.url_template:
+    def load_page_url(self):
+        """페이지 URL 템플릿 로드"""
+        try:
+            cursor = self.db_conn.cursor()
+            cursor.execute("""
+                SELECT page_url
+                FROM hhp_page_urls
+                WHERE account_name = %s AND page_type = %s
+            """, (self.account_name, self.page_type))
+
+            result = cursor.fetchone()
+            cursor.close()
+
+            if result:
+                self.url_template = result[0]
+                print(f"[OK] Loaded URL template")
+                return True
+            else:
+                print("[ERROR] URL template not found")
+                return False
+
+        except Exception as e:
+            print(f"[ERROR] Failed to load URL: {e}")
             return False
 
-        # 4. WebDriver 설정
-        self.setup_driver()
+    def generate_batch_id(self):
+        """배치 ID 생성"""
+        now = datetime.now()
+        return f"w_{now.strftime('%Y%m%d_%H%M%S')}"
 
-        # 5. 배치 ID 및 캘린더 주차 생성
-        if not self.batch_id:
-            self.batch_id = self.generate_batch_id(self.account_name)
-            print(f"[INFO] Batch ID generated: {self.batch_id}")
-        else:
-            print(f"[INFO] Batch ID received: {self.batch_id}")
+    def generate_calendar_week(self):
+        """캘린더 주차 생성"""
+        now = datetime.now()
+        return now.strftime('%Y-W%U')
 
-        self.calendar_week = self.generate_calendar_week()
-        print(f"[INFO] Calendar Week: {self.calendar_week}")
+    def setup_playwright(self):
+        """Playwright 브라우저 설정"""
+        try:
+            self.playwright = sync_playwright().start()
 
-        # 6. 오래된 로그 정리
-        self.cleanup_old_logs()
+            # Chrome 브라우저 사용
+            self.browser = self.playwright.chromium.launch(
+                headless=False,
+                channel="chrome",
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox',
+                    '--start-maximized',
+                    '--lang=en-US'
+                ]
+            )
 
-        return True
+            # 컨텍스트 생성
+            self.context = self.browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                locale='en-US'
+            )
+
+            # 스텔스 스크립트 주입
+            self.context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+
+                window.chrome = {
+                    runtime: {},
+                    loadTimes: function() {},
+                    csi: function() {},
+                    app: {}
+                };
+            """)
+
+            self.page = self.context.new_page()
+            print("[OK] Playwright browser initialized")
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] Failed to setup Playwright: {e}")
+            return False
+
+    def handle_captcha(self):
+        """CAPTCHA 자동 해결"""
+        try:
+            print("[INFO] Checking for CAPTCHA...")
+
+            # CAPTCHA 버튼 찾기
+            captcha_selectors = [
+                'text=PRESS & HOLD',
+                'text="PRESS & HOLD"',
+                'text=/PRESS.*HOLD/i',
+                'button:has-text("PRESS")',
+                'button:has-text("HOLD")',
+                '[class*="captcha"]',
+                '[class*="PressHold"]'
+            ]
+
+            button = None
+            for selector in captcha_selectors:
+                try:
+                    temp_button = self.page.locator(selector).first
+                    if temp_button.is_visible(timeout=2000):
+                        button = temp_button
+                        print(f"[OK] CAPTCHA detected with selector: {selector}")
+                        break
+                except:
+                    continue
+
+            if not button:
+                # CAPTCHA 키워드 확인
+                page_content = self.page.content().lower()
+                if any(keyword in page_content for keyword in ['press & hold', 'captcha', 'human verification']):
+                    print("[WARNING] CAPTCHA keywords found but button not located")
+                    print("[INFO] Waiting 30 seconds for manual intervention...")
+                    time.sleep(30)
+                    return True
+                else:
+                    print("[INFO] No CAPTCHA detected")
+                    return True
+
+            # 자동 CAPTCHA 해결 시도
+            print("[OK] Attempting to solve CAPTCHA automatically...")
+
+            box = button.bounding_box()
+            if box:
+                # 버튼 중앙 좌표
+                center_x = box['x'] + box['width'] / 2
+                center_y = box['y'] + box['height'] / 2
+
+                # 마우스 이동
+                self.page.mouse.move(center_x, center_y)
+                time.sleep(random.uniform(0.3, 0.6))
+
+                # Press & Hold
+                self.page.mouse.down()
+                print("[INFO] Holding button...")
+                hold_time = random.uniform(7, 9)
+                print(f"[INFO] Holding for {hold_time:.1f} seconds...")
+                time.sleep(hold_time)
+                self.page.mouse.up()
+
+                print("[OK] CAPTCHA button released")
+                time.sleep(random.uniform(3, 5))
+
+                # 성공 확인
+                try:
+                    if not button.is_visible(timeout=3000):
+                        print("[OK] CAPTCHA solved successfully")
+                        return True
+                    else:
+                        print("[WARNING] CAPTCHA still visible after automatic attempt")
+                        print("[INFO] Waiting 60 seconds for manual intervention...")
+                        time.sleep(60)
+
+                        if not button.is_visible(timeout=2000):
+                            print("[OK] CAPTCHA solved (likely manually)")
+                            return True
+                        else:
+                            print("[WARNING] CAPTCHA still present")
+                            return False
+                except:
+                    print("[OK] CAPTCHA appears to be solved")
+                    return True
+            else:
+                print("[WARNING] Could not get button position")
+                return False
+
+        except Exception as e:
+            print(f"[WARNING] CAPTCHA check failed: {e}")
+            return True
 
     def crawl_page(self, page_number):
-        """
-        특정 페이지 크롤링
-
-        Args: page_number (int): 페이지 번호
-
-        Returns: list: 수집된 제품 데이터 리스트
-        """
+        """특정 페이지 크롤링"""
         try:
-            # URL 생성
             url = self.url_template.replace('{page}', str(page_number))
             print(f"\n[INFO] Crawling page {page_number}: {url}")
 
             # 페이지 로드
-            self.driver.get(url)
-            time.sleep(30)
+            self.page.goto(url, wait_until="domcontentloaded", timeout=90000)
+            time.sleep(random.uniform(3, 5))
+
+            # 첫 페이지일 경우 CAPTCHA 처리
+            if page_number == 1:
+                if not self.handle_captcha():
+                    print("[WARNING] CAPTCHA handling failed")
+
+                time.sleep(random.uniform(3, 5))
 
             # HTML 파싱
-            page_html = self.driver.page_source
+            page_html = self.page.content()
             tree = html.fromstring(page_html)
 
             # 제품 리스트 XPath
@@ -124,7 +298,7 @@ class WalmartMainCrawler(BaseCrawler):
             base_containers = tree.xpath(base_container_xpath)
             print(f"[INFO] Found {len(base_containers)} products on page {page_number}")
 
-            # 테스트 모드일 때는 설정된 범위만, 운영 모드일 때는 전체 처리
+            # 테스트/운영 모드에 따라 처리
             if self.test_mode:
                 containers_to_process = base_containers[:self.test_count]
             else:
@@ -133,7 +307,6 @@ class WalmartMainCrawler(BaseCrawler):
             products = []
             for idx, item in enumerate(containers_to_process, 1):
                 try:
-                    # main_rank 계산 (페이지별 연속 증가)
                     self.current_rank += 1
 
                     product_data = {
@@ -145,76 +318,91 @@ class WalmartMainCrawler(BaseCrawler):
                         'batch_id': self.batch_id
                     }
 
-                    # 각 필드를 개별 try-except로 감싸서 예외 시에도 계속 진행
+                    # 각 필드 추출 (try-except로 감싸기)
                     try:
-                        product_url_raw = self.extract_with_fallback(item, self.xpaths.get('product_url', {}).get('xpath'))
-                        product_data['product_url'] = f"https://www.walmart.com{product_url_raw}" if product_url_raw and product_url_raw.startswith('/') else product_url_raw
+                        product_url_raw = item.xpath(self.xpaths.get('product_url', {}).get('xpath'))
+                        if product_url_raw:
+                            product_url_raw = product_url_raw[0] if isinstance(product_url_raw, list) else product_url_raw
+                            product_data['product_url'] = f"https://www.walmart.com{product_url_raw}" if product_url_raw.startswith('/') else product_url_raw
+                        else:
+                            product_data['product_url'] = None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract product_url for product {idx}: {e}")
                         product_data['product_url'] = None
 
                     try:
-                        product_data['retailer_sku_name'] = self.extract_with_fallback(item, self.xpaths.get('retailer_sku_name', {}).get('xpath'))
+                        retailer_sku_name_raw = item.xpath(self.xpaths.get('retailer_sku_name', {}).get('xpath'))
+                        product_data['retailer_sku_name'] = retailer_sku_name_raw[0] if retailer_sku_name_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract retailer_sku_name for product {idx}: {e}")
                         product_data['retailer_sku_name'] = None
 
                     try:
-                        product_data['final_sku_price'] = self.extract_with_fallback(item, self.xpaths.get('final_sku_price', {}).get('xpath'))
+                        final_sku_price_raw = item.xpath(self.xpaths.get('final_sku_price', {}).get('xpath'))
+                        product_data['final_sku_price'] = final_sku_price_raw[0] if final_sku_price_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract final_sku_price for product {idx}: {e}")
                         product_data['final_sku_price'] = None
 
                     try:
-                        product_data['original_sku_price'] = self.extract_with_fallback(item, self.xpaths.get('original_sku_price', {}).get('xpath'))
+                        original_sku_price_raw = item.xpath(self.xpaths.get('original_sku_price', {}).get('xpath'))
+                        product_data['original_sku_price'] = original_sku_price_raw[0] if original_sku_price_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract original_sku_price for product {idx}: {e}")
                         product_data['original_sku_price'] = None
 
                     try:
-                        product_data['offer'] = self.extract_with_fallback(item, self.xpaths.get('offer', {}).get('xpath'))
+                        offer_raw = item.xpath(self.xpaths.get('offer', {}).get('xpath'))
+                        product_data['offer'] = offer_raw[0] if offer_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract offer for product {idx}: {e}")
                         product_data['offer'] = None
 
                     try:
-                        product_data['pick_up_availability'] = self.extract_with_fallback(item, self.xpaths.get('pick_up_availability', {}).get('xpath'))
+                        pickup_raw = item.xpath(self.xpaths.get('pick_up_availability', {}).get('xpath'))
+                        product_data['pick_up_availability'] = pickup_raw[0] if pickup_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract pick_up_availability for product {idx}: {e}")
                         product_data['pick_up_availability'] = None
 
                     try:
-                        product_data['shipping_availability'] = self.extract_with_fallback(item, self.xpaths.get('shipping_availability', {}).get('xpath'))
+                        shipping_raw = item.xpath(self.xpaths.get('shipping_availability', {}).get('xpath'))
+                        product_data['shipping_availability'] = shipping_raw[0] if shipping_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract shipping_availability for product {idx}: {e}")
                         product_data['shipping_availability'] = None
 
                     try:
-                        product_data['delivery_availability'] = self.extract_with_fallback(item, self.xpaths.get('delivery_availability', {}).get('xpath'))
+                        delivery_raw = item.xpath(self.xpaths.get('delivery_availability', {}).get('xpath'))
+                        product_data['delivery_availability'] = delivery_raw[0] if delivery_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract delivery_availability for product {idx}: {e}")
                         product_data['delivery_availability'] = None
 
                     try:
-                        product_data['sku_status'] = self.extract_with_fallback(item, self.xpaths.get('sku_status', {}).get('xpath'))
+                        sku_status_raw = item.xpath(self.xpaths.get('sku_status', {}).get('xpath'))
+                        product_data['sku_status'] = sku_status_raw[0] if sku_status_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract sku_status for product {idx}: {e}")
                         product_data['sku_status'] = None
 
                     try:
-                        product_data['retailer_membership_discounts'] = self.extract_with_fallback(item, self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
+                        membership_raw = item.xpath(self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
+                        product_data['retailer_membership_discounts'] = membership_raw[0] if membership_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract retailer_membership_discounts for product {idx}: {e}")
                         product_data['retailer_membership_discounts'] = None
 
                     try:
-                        product_data['available_quantity_for_purchase'] = self.extract_with_fallback(item, self.xpaths.get('available_quantity_for_purchase', {}).get('xpath'))
+                        quantity_raw = item.xpath(self.xpaths.get('available_quantity_for_purchase', {}).get('xpath'))
+                        product_data['available_quantity_for_purchase'] = quantity_raw[0] if quantity_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract available_quantity_for_purchase for product {idx}: {e}")
                         product_data['available_quantity_for_purchase'] = None
 
                     try:
-                        product_data['inventory_status'] = self.extract_with_fallback(item, self.xpaths.get('inventory_status', {}).get('xpath'))
+                        inventory_raw = item.xpath(self.xpaths.get('inventory_status', {}).get('xpath'))
+                        product_data['inventory_status'] = inventory_raw[0] if inventory_raw else None
                     except Exception as e:
                         print(f"[WARNING] Failed to extract inventory_status for product {idx}: {e}")
                         product_data['inventory_status'] = None
@@ -229,16 +417,11 @@ class WalmartMainCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to crawl page {page_number}: {e}")
+            traceback.print_exc()
             return []
 
     def save_products(self, products):
-        """
-        수집된 제품 데이터를 wmart_hhp_product_list 테이블에 저장
-        - 10개씩 배치로 나눠서 저장 (부분 실패 방지)
-
-        Args: products (list): 제품 데이터 리스트
-        Returns: int: 저장된 제품 수
-        """
+        """제품 데이터 DB 저장 (10개씩 배치)"""
         if not products:
             return 0
 
@@ -259,17 +442,14 @@ class WalmartMainCrawler(BaseCrawler):
                 )
             """
 
-            # 배치 크기 설정 (10개씩 나눠서 저장)
             BATCH_SIZE = 10
             total_saved = 0
 
-            # 10개씩 쪼개서 저장
             for batch_start in range(0, len(products), BATCH_SIZE):
                 batch_end = min(batch_start + BATCH_SIZE, len(products))
                 batch_products = products[batch_start:batch_end]
 
                 try:
-                    # 현재 배치(10개)를 튜플 리스트로 변환
                     values_list = []
                     for product in batch_products:
                         one_product = (
@@ -294,24 +474,19 @@ class WalmartMainCrawler(BaseCrawler):
                         )
                         values_list.append(one_product)
 
-                    # 10개 배치 INSERT
                     cursor.executemany(insert_query, values_list)
-
-                    # 10개 저장할 때마다 즉시 COMMIT
                     self.db_conn.commit()
 
                     total_saved += len(batch_products)
                     print(f"[INFO] Saved batch {batch_start+1}-{batch_end} ({len(batch_products)} products)")
 
                 except Exception as batch_error:
-                    # 현재 배치만 실패, 다음 배치는 계속 진행
                     print(f"[ERROR] Failed to save batch {batch_start+1}-{batch_end}: {batch_error}")
                     self.db_conn.rollback()
                     continue
 
             cursor.close()
 
-            # 진행 상황 요약 출력
             print(f"[SUCCESS] Saved {total_saved}/{len(products)} products to database")
             for i, product in enumerate(products[:3], 1):
                 sku_name = product['retailer_sku_name'] or 'N/A'
@@ -325,11 +500,43 @@ class WalmartMainCrawler(BaseCrawler):
             print(f"[ERROR] Failed to save products: {e}")
             return 0
 
+    def initialize(self):
+        """크롤러 초기화"""
+        print("\n" + "="*60)
+        print(f"[INFO] Walmart Main Crawler Initialization (Playwright)")
+        print(f"[INFO] Test Mode: {'ON (1 product)' if self.test_mode else 'OFF (max 300 products)'}")
+        print("="*60 + "\n")
+
+        # 1. DB 연결
+        if not self.connect_db():
+            return False
+
+        # 2. XPath 셀렉터 로드
+        if not self.load_xpaths():
+            return False
+
+        # 3. URL 템플릿 로드
+        if not self.load_page_url():
+            return False
+
+        # 4. Playwright 설정
+        if not self.setup_playwright():
+            return False
+
+        # 5. 배치 ID 및 캘린더 주차 생성
+        if not self.batch_id:
+            self.batch_id = self.generate_batch_id()
+            print(f"[INFO] Batch ID generated: {self.batch_id}")
+        else:
+            print(f"[INFO] Batch ID received: {self.batch_id}")
+
+        self.calendar_week = self.generate_calendar_week()
+        print(f"[INFO] Calendar Week: {self.calendar_week}")
+
+        return True
+
     def run(self):
-        """
-        크롤러 실행
-        Returns: bool: 성공 시 True, 실패 시 False
-        """
+        """크롤러 실행"""
         try:
             # 초기화
             if not self.initialize():
@@ -344,13 +551,13 @@ class WalmartMainCrawler(BaseCrawler):
             total_products = 0
 
             if self.test_mode:
-                # 테스트 모드: 1개 제품만 크롤링 및 DB 저장
+                # 테스트 모드: 1개 제품만
                 self.current_rank = 0
                 products = self.crawl_page(1)
                 saved_count = self.save_products(products)
                 total_products += saved_count
             else:
-                # 운영 모드: 300개 제품이 수집될 때까지 계속 크롤링
+                # 운영 모드: 300개까지
                 self.current_rank = 0
                 page_num = 1
 
@@ -359,12 +566,10 @@ class WalmartMainCrawler(BaseCrawler):
 
                     if not products:
                         print(f"[WARNING] No products found at page {page_num}")
-                        # 연속 2페이지 빈 페이지면 종료
                         if page_num > 1:
                             print(f"[INFO] No more products available, stopping...")
                             break
                     else:
-                        # 300개 초과 방지: 남은 개수만큼만 저장
                         remaining = self.max_products - total_products
                         products_to_save = products[:remaining]
 
@@ -373,13 +578,11 @@ class WalmartMainCrawler(BaseCrawler):
 
                         print(f"[INFO] Progress: {total_products}/{self.max_products} products collected")
 
-                        # 300개 도달 확인
                         if total_products >= self.max_products:
                             print(f"[INFO] Reached target product count ({self.max_products}), stopping...")
                             break
 
-                    # 페이지 간 대기
-                    time.sleep(30)
+                    time.sleep(random.uniform(5, 10))
                     page_num += 1
 
             # 결과 출력
@@ -393,22 +596,30 @@ class WalmartMainCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Crawler execution failed: {e}")
+            traceback.print_exc()
             return False
 
         finally:
             # 리소스 정리
-            if self.driver:
-                self.driver.quit()
-                print("[INFO] WebDriver closed")
+            if self.page:
+                self.page.close()
+                print("[INFO] Page closed")
+            if self.context:
+                self.context.close()
+                print("[INFO] Context closed")
+            if self.browser:
+                self.browser.close()
+                print("[INFO] Browser closed")
+            if self.playwright:
+                self.playwright.stop()
+                print("[INFO] Playwright stopped")
             if self.db_conn:
                 self.db_conn.close()
                 print("[INFO] Database connection closed")
 
 
 def main():
-    """
-    개별 실행 시 진입점 (테스트 모드 ON)
-    """
+    """개별 실행 시 진입점 (테스트 모드 ON)"""
     crawler = WalmartMainCrawler(test_mode=True)
     success = crawler.run()
 

@@ -52,7 +52,7 @@ class BestBuyMainCrawler(BaseCrawler):
         self.test_count = 1
 
         # 운영 모드 설정
-        self.max_products = 400  # 운영 모드 목표: 400개 제품 수집
+        self.max_products = 300  # 운영 모드 목표: 300개 제품 수집
         self.current_rank = 0
 
     def initialize(self):
