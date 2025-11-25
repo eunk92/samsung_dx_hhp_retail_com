@@ -417,8 +417,31 @@ class AmazonDetailCrawler(BaseCrawler):
             # item: product_url에서 ASIN 추출
             item = self.extract_asin_from_url(product_url)
 
-            trade_in = self.extract_with_fallback(tree, self.xpaths.get('trade_in', {}).get('xpath'))
-            hhp_carrier = self.extract_with_fallback(tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
+            # === 모든 필드를 None으로 초기화 ===
+            trade_in = None
+            hhp_carrier = None
+            hhp_storage = None
+            hhp_color = None
+            count_of_reviews = None
+            star_rating = None
+            count_of_star_ratings = None
+            summarized_review_content = None
+            sku_popularity = None
+            bundle = None
+            retailer_membership_discounts = None
+            rank_1 = None
+            rank_2 = None
+
+            # === 개별 필드 추출 (각각 try-except 처리) ===
+            try:
+                trade_in = self.extract_with_fallback(tree, self.xpaths.get('trade_in', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract trade_in: {e}")
+
+            try:
+                hhp_carrier = self.extract_with_fallback(tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract hhp_carrier: {e}")
 
             # === "Additional details" 버튼 클릭하여 색상/용량 정보 확장 ===
             try:
@@ -449,48 +472,84 @@ class AmazonDetailCrawler(BaseCrawler):
                 print(f"[INFO] Attempting to extract from static Product Information table as fallback...")
 
             # === hhp_storage, hhp_color 추출 (fallback 로직 포함) ===
-            # 먼저 기본 XPath로 시도 (Additional details 확장된 경우)
-            hhp_storage = self.extract_with_fallback(tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
-            hhp_color = self.extract_with_fallback(tree, self.xpaths.get('hhp_color', {}).get('xpath'))
+            try:
+                # 먼저 기본 XPath로 시도 (Additional details 확장된 경우)
+                hhp_storage = self.extract_with_fallback(tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
 
-            # 값이 없으면 fallback: 정적 Product Information 테이블에서 추출
-            if not hhp_storage:
-                fallback_storage_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Memory Storage Capacity')]/following-sibling::td"
-                hhp_storage = self.extract_with_fallback(tree, fallback_storage_xpath)
-                if hhp_storage:
-                    print(f"[INFO] hhp_storage extracted from fallback table: {hhp_storage}")
+                # 값이 없으면 fallback: 정적 Product Information 테이블에서 추출
+                if not hhp_storage:
+                    fallback_storage_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Memory Storage Capacity')]/following-sibling::td"
+                    hhp_storage = self.extract_with_fallback(tree, fallback_storage_xpath)
+                    if hhp_storage:
+                        print(f"[INFO] hhp_storage extracted from fallback table: {hhp_storage}")
+            except Exception as e:
+                print(f"[WARNING] Failed to extract hhp_storage: {e}")
 
-            if not hhp_color:
-                fallback_color_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Color')]/following-sibling::td"
-                hhp_color = self.extract_with_fallback(tree, fallback_color_xpath)
-                if hhp_color:
-                    print(f"[INFO] hhp_color extracted from fallback table: {hhp_color}")
+            try:
+                hhp_color = self.extract_with_fallback(tree, self.xpaths.get('hhp_color', {}).get('xpath'))
 
+                if not hhp_color:
+                    fallback_color_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Color')]/following-sibling::td"
+                    hhp_color = self.extract_with_fallback(tree, fallback_color_xpath)
+                    if hhp_color:
+                        print(f"[INFO] hhp_color extracted from fallback table: {hhp_color}")
+            except Exception as e:
+                print(f"[WARNING] Failed to extract hhp_color: {e}")
 
             # === 리뷰수/별점/별점별리뷰수 데이터 추출 및 후처리 ===
-            # count_of_reviews: 원본 추출 후 리뷰 개수 추출
-            count_of_reviews_raw = self.extract_with_fallback(tree, self.xpaths.get('count_of_reviews', {}).get('xpath'))
-            count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
+            try:
+                # count_of_reviews: 원본 추출 후 리뷰 개수 추출
+                count_of_reviews_raw = self.extract_with_fallback(tree, self.xpaths.get('count_of_reviews', {}).get('xpath'))
+                count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
+            except Exception as e:
+                print(f"[WARNING] Failed to extract count_of_reviews: {e}")
 
-            # star_rating: 원본 추출 후 별점 추출
-            star_rating_raw = self.extract_with_fallback(tree, self.xpaths.get('star_rating', {}).get('xpath'))
-            star_rating = data_extractor.extract_rating(star_rating_raw)
+            try:
+                # star_rating: 원본 추출 후 별점 추출
+                star_rating_raw = self.extract_with_fallback(tree, self.xpaths.get('star_rating', {}).get('xpath'))
+                star_rating = data_extractor.extract_rating(star_rating_raw)
+            except Exception as e:
+                print(f"[WARNING] Failed to extract star_rating: {e}")
 
-            # count_of_star_ratings: 별점 분포 계산
-            count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
-            count_of_star_ratings = data_extractor.extract_star_ratings_count(tree, count_of_reviews, count_of_star_ratings_xpath, self.account_name)
+            try:
+                # count_of_star_ratings: 별점 분포 계산
+                count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
+                count_of_star_ratings = data_extractor.extract_star_ratings_count(tree, count_of_reviews, count_of_star_ratings_xpath, self.account_name)
+            except Exception as e:
+                print(f"[WARNING] Failed to extract count_of_star_ratings: {e}")
 
             # === Detail 페이지에서 추출 가능한 모든 필드 ===
-            # summarized_review_content: AI 요약 리뷰 (Detail 페이지)
-            summarized_review_content = self.extract_with_fallback(tree, self.xpaths.get('summarized_review_content', {}).get('xpath'))
+            try:
+                # summarized_review_content: AI 요약 리뷰 (Detail 페이지)
+                summarized_review_content = self.extract_with_fallback(tree, self.xpaths.get('summarized_review_content', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract summarized_review_content: {e}")
 
-            # 기타 상세 정보
-            sku_popularity = self.extract_with_fallback(tree, self.xpaths.get('sku_popularity', {}).get('xpath'))
-            bundle = self.extract_with_fallback(tree, self.xpaths.get('bundle', {}).get('xpath'))
-            
-            retailer_membership_discounts = self.extract_with_fallback(tree, self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
-            rank_1 = self.extract_with_fallback(tree, self.xpaths.get('rank_1', {}).get('xpath'))
-            rank_2 = self.extract_with_fallback(tree, self.xpaths.get('rank_2', {}).get('xpath'))
+            try:
+                # 기타 상세 정보
+                sku_popularity = self.extract_with_fallback(tree, self.xpaths.get('sku_popularity', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract sku_popularity: {e}")
+
+            try:
+                bundle = self.extract_with_fallback(tree, self.xpaths.get('bundle', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract bundle: {e}")
+
+            try:
+                retailer_membership_discounts = self.extract_with_fallback(tree, self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract retailer_membership_discounts: {e}")
+
+            try:
+                rank_1 = self.extract_with_fallback(tree, self.xpaths.get('rank_1', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract rank_1: {e}")
+
+            try:
+                rank_2 = self.extract_with_fallback(tree, self.xpaths.get('rank_2', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract rank_2: {e}")
 
             print(f"[INFO] Detail page extraction completed")
 
