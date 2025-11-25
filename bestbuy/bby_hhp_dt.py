@@ -253,35 +253,54 @@ class BestBuyDetailCrawler(BaseCrawler):
                 print(f"[DEBUG] count_of_star_ratings_xpath: {count_of_star_ratings_xpath}")
                 print(f"[DEBUG] recommendation_intent_xpath: {recommendation_intent_xpath}")
 
+                # Selenium용 xpath 변환 함수 (요소만 찾기)
+                def convert_to_element_xpath(xpath_str):
+                    """Selenium용으로 /text()와 normalize-space() 제거"""
+                    if not xpath_str:
+                        return None
+                    # /text() 제거
+                    xpath_str = xpath_str.replace('/text()', '')
+                    # normalize-space(...) -> ... 추출
+                    if 'normalize-space(' in xpath_str:
+                        import re
+                        match = re.search(r'normalize-space\((.*)\)', xpath_str)
+                        if match:
+                            xpath_str = match.group(1)
+                    return xpath_str
+
                 # 각 요소를 하나씩 확인하면서 디버깅
                 try:
                     if star_rating_xpath:
-                        print("[DEBUG] Waiting for star_rating...")
-                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, star_rating_xpath))
+                        element_xpath = convert_to_element_xpath(star_rating_xpath)
+                        print(f"[DEBUG] Waiting for star_rating... (converted: {element_xpath})")
+                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, element_xpath))
                         print("[DEBUG] ✓ star_rating found")
                 except Exception as e:
                     print(f"[WARNING] star_rating not found: {e}")
 
                 try:
                     if count_of_reviews_xpath:
-                        print("[DEBUG] Waiting for count_of_reviews...")
-                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, count_of_reviews_xpath))
+                        element_xpath = convert_to_element_xpath(count_of_reviews_xpath)
+                        print(f"[DEBUG] Waiting for count_of_reviews... (converted: {element_xpath})")
+                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, element_xpath))
                         print("[DEBUG] ✓ count_of_reviews found")
                 except Exception as e:
                     print(f"[WARNING] count_of_reviews not found: {e}")
 
                 try:
                     if count_of_star_ratings_xpath:
-                        print("[DEBUG] Waiting for count_of_star_ratings...")
-                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, count_of_star_ratings_xpath))
+                        element_xpath = convert_to_element_xpath(count_of_star_ratings_xpath)
+                        print(f"[DEBUG] Waiting for count_of_star_ratings... (converted: {element_xpath})")
+                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, element_xpath))
                         print("[DEBUG] ✓ count_of_star_ratings found")
                 except Exception as e:
                     print(f"[WARNING] count_of_star_ratings not found: {e}")
 
                 try:
                     if recommendation_intent_xpath:
-                        print("[DEBUG] Waiting for recommendation_intent...")
-                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, recommendation_intent_xpath))
+                        element_xpath = convert_to_element_xpath(recommendation_intent_xpath)
+                        print(f"[DEBUG] Waiting for recommendation_intent... (converted: {element_xpath})")
+                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, element_xpath))
                         print("[DEBUG] ✓ recommendation_intent found")
                 except Exception as e:
                     print(f"[WARNING] recommendation_intent not found: {e}")
@@ -395,8 +414,26 @@ class BestBuyDetailCrawler(BaseCrawler):
                     pros_row_xpath = self.xpaths.get('pros', {}).get('xpath')
                     cons_row_xpath = self.xpaths.get('cons', {}).get('xpath')
 
-                    pros_cells = tree.xpath(pros_row_xpath) if pros_row_xpath else []
-                    cons_cells = tree.xpath(cons_row_xpath) if cons_row_xpath else []
+                    print(f"[DEBUG] pros_row_xpath: {pros_row_xpath}")
+                    print(f"[DEBUG] cons_row_xpath: {cons_row_xpath}")
+
+                    # XPath가 유효한 경우만 실행
+                    pros_cells = []
+                    cons_cells = []
+
+                    try:
+                        if pros_row_xpath and pros_row_xpath.strip():
+                            pros_cells = tree.xpath(pros_row_xpath)
+                            print(f"[DEBUG] Found {len(pros_cells)} pros cells")
+                    except Exception as e:
+                        print(f"[WARNING] Failed to extract pros: {e}")
+
+                    try:
+                        if cons_row_xpath and cons_row_xpath.strip():
+                            cons_cells = tree.xpath(cons_row_xpath)
+                            print(f"[DEBUG] Found {len(cons_cells)} cons cells")
+                    except Exception as e:
+                        print(f"[WARNING] Failed to extract cons: {e}")
 
                     if pros_cells or cons_cells:
                         # 각 제품의 pros/cons를 리스트로 추출
