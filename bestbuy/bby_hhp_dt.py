@@ -247,14 +247,44 @@ class BestBuyDetailCrawler(BaseCrawler):
                 count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
                 recommendation_intent_xpath = self.xpaths.get('recommendation_intent', {}).get('xpath')
 
-                WebDriverWait(self.driver, 90).until(
-                    lambda driver: (
-                        (driver.find_elements(By.XPATH, star_rating_xpath) if star_rating_xpath else True) and
-                        (driver.find_elements(By.XPATH, count_of_reviews_xpath) if count_of_reviews_xpath else True) and
-                        (driver.find_elements(By.XPATH, count_of_star_ratings_xpath) if count_of_star_ratings_xpath else True) and
-                        (driver.find_elements(By.XPATH, recommendation_intent_xpath) if recommendation_intent_xpath else True)
-                    )
-                )
+                # 디버깅: XPath 확인
+                print(f"[DEBUG] star_rating_xpath: {star_rating_xpath}")
+                print(f"[DEBUG] count_of_reviews_xpath: {count_of_reviews_xpath}")
+                print(f"[DEBUG] count_of_star_ratings_xpath: {count_of_star_ratings_xpath}")
+                print(f"[DEBUG] recommendation_intent_xpath: {recommendation_intent_xpath}")
+
+                # 각 요소를 하나씩 확인하면서 디버깅
+                try:
+                    if star_rating_xpath:
+                        print("[DEBUG] Waiting for star_rating...")
+                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, star_rating_xpath))
+                        print("[DEBUG] ✓ star_rating found")
+                except Exception as e:
+                    print(f"[WARNING] star_rating not found: {e}")
+
+                try:
+                    if count_of_reviews_xpath:
+                        print("[DEBUG] Waiting for count_of_reviews...")
+                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, count_of_reviews_xpath))
+                        print("[DEBUG] ✓ count_of_reviews found")
+                except Exception as e:
+                    print(f"[WARNING] count_of_reviews not found: {e}")
+
+                try:
+                    if count_of_star_ratings_xpath:
+                        print("[DEBUG] Waiting for count_of_star_ratings...")
+                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, count_of_star_ratings_xpath))
+                        print("[DEBUG] ✓ count_of_star_ratings found")
+                except Exception as e:
+                    print(f"[WARNING] count_of_star_ratings not found: {e}")
+
+                try:
+                    if recommendation_intent_xpath:
+                        print("[DEBUG] Waiting for recommendation_intent...")
+                        WebDriverWait(self.driver, 30).until(lambda d: d.find_elements(By.XPATH, recommendation_intent_xpath))
+                        print("[DEBUG] ✓ recommendation_intent found")
+                except Exception as e:
+                    print(f"[WARNING] recommendation_intent not found: {e}")
                 print("[INFO] All key elements verified and loaded")
                 time.sleep(1)  # 최종 안정화 대기
 
@@ -504,48 +534,52 @@ class BestBuyDetailCrawler(BaseCrawler):
                 review_button_found = False
 
                 # 페이지 상단으로 이동
-                print(f"[INFO] Scrolling to top of page to search for review button")
+                print(f"[INFO] Scrolling from top to find review button")
                 self.driver.execute_script("window.scrollTo(0, 0);")
                 time.sleep(1)
 
-                # 페이지 아래로 스크롤하면서 리뷰 버튼 찾기
-                max_scroll_attempts = 20  # 최대 20번 스크롤 시도
-                scroll_step = 300  # 한 번에 300px씩 스크롤
+                # 페이지 전체 높이 계산
+                scroll_height = self.driver.execute_script("return document.body.scrollHeight")
+                current_position = 0
+                scroll_step = 400  # 400px씩 스크롤 (TV 크롤러와 동일)
 
-                for scroll_attempt in range(max_scroll_attempts):
+                print(f"[INFO] Page height: {scroll_height}px, starting scroll search...")
+
+                # 페이지 끝까지 스크롤하면서 리뷰 버튼 찾기
+                while current_position < scroll_height:
                     try:
-                        print(f"[INFO] Scroll attempt {scroll_attempt + 1}/{max_scroll_attempts}: Searching for review button...")
-
-                        # 현재 위치에서 리뷰 버튼 찾기 시도 (짧은 타임아웃)
-                        review_button = WebDriverWait(self.driver, 2).until(
-                            EC.presence_of_element_located((By.XPATH, reviews_button_xpath))
-                        )
+                        # 현재 위치에서 리뷰 버튼 찾기 시도
+                        review_button = self.driver.find_element(By.XPATH, reviews_button_xpath)
 
                         # 버튼을 찾았으면 화면 중앙으로 스크롤
+                        print(f"[INFO] Review button found at {current_position}px")
                         self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", review_button)
-                        time.sleep(1)
+                        time.sleep(2)
 
-                        # 클릭 가능할 때까지 대기
-                        review_button = WebDriverWait(self.driver, 5).until(
-                            EC.element_to_be_clickable((By.XPATH, reviews_button_xpath))
-                        )
-
-                        print(f"[INFO] Review button found at scroll position, clicking to navigate to review page")
-                        review_button.click()
-                        review_button_found = True
-                        break  # 성공하면 루프 종료
+                        # JavaScript로 클릭 시도
+                        try:
+                            self.driver.execute_script("arguments[0].click();", review_button)
+                            print(f"[INFO] Review button clicked successfully (JS)")
+                            review_button_found = True
+                            time.sleep(5)  # 리뷰 페이지 로딩 대기
+                            break
+                        except Exception as click_err:
+                            print(f"[WARNING] JS click failed: {click_err}, trying normal click")
+                            # 일반 클릭 시도
+                            review_button.click()
+                            print(f"[INFO] Review button clicked successfully (normal)")
+                            review_button_found = True
+                            time.sleep(5)
+                            break
 
                     except Exception as e:
-                        # 버튼을 못 찾았으면 아래로 스크롤
-                        current_scroll = self.driver.execute_script("return window.pageYOffset;")
-                        self.driver.execute_script(f"window.scrollBy(0, {scroll_step});")
-                        time.sleep(0.5)
+                        # 버튼을 못 찾았으면 계속 스크롤
+                        if "no such element" not in str(e).lower():
+                            print(f"[DEBUG] Button search error: {e}")
 
-                        # 페이지 끝에 도달했는지 확인
-                        new_scroll = self.driver.execute_script("return window.pageYOffset;")
-                        if current_scroll == new_scroll:
-                            print(f"[WARNING] Reached end of page without finding review button")
-                            break
+                        current_position += scroll_step
+                        self.driver.execute_script(f"window.scrollTo(0, {current_position});")
+                        time.sleep(0.5)
 
                 if not review_button_found:
                     print(f"[WARNING] Could not find review button after scrolling entire page, skipping review extraction")
