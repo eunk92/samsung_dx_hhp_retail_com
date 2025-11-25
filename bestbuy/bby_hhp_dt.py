@@ -246,13 +246,15 @@ class BestBuyDetailCrawler(BaseCrawler):
                 count_of_reviews_xpath = self.xpaths.get('count_of_reviews', {}).get('xpath')
                 count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
                 similar_products_container_xpath = self.xpaths.get('similar_products_container', {}).get('xpath')
+                recommendation_intent_xpath = self.xpaths.get('recommendation_intent', {}).get('xpath')
 
                 WebDriverWait(self.driver, 30).until(
                     lambda driver: (
                         (driver.find_elements(By.XPATH, star_rating_xpath) if star_rating_xpath else True) and
                         (driver.find_elements(By.XPATH, count_of_reviews_xpath) if count_of_reviews_xpath else True) and
                         (driver.find_elements(By.XPATH, count_of_star_ratings_xpath) if count_of_star_ratings_xpath else True) and
-                        (driver.find_elements(By.XPATH, similar_products_container_xpath) if similar_products_container_xpath else True)
+                        (driver.find_elements(By.XPATH, similar_products_container_xpath) if similar_products_container_xpath else True) and
+                        (driver.find_elements(By.XPATH, recommendation_intent_xpath) if recommendation_intent_xpath else True)
                     )
                 )
                 print("[INFO] All key elements verified and loaded")
@@ -302,32 +304,67 @@ class BestBuyDetailCrawler(BaseCrawler):
                 if similar_product_containers:
                     similar_product_names = []
 
+                    # 1단계: 각 제품 컨테이너에서 제품명과 URL 추출
+                    products_basic_info = []
                     for container in similar_product_containers:
                         # 제품명 추출
                         name_xpath = self.xpaths.get('similar_product_name', {}).get('xpath')
                         name = container.xpath(name_xpath)[0] if name_xpath and container.xpath(name_xpath) else None
 
-                        # Pros 추출 (리스트로 저장)
-                        pros_xpath = self.xpaths.get('pros', {}).get('xpath')
-                        pros_list = container.xpath(pros_xpath) if pros_xpath else []
-
-                        # Cons 추출 (리스트로 저장)
-                        cons_xpath = self.xpaths.get('cons', {}).get('xpath')
-                        cons_list = container.xpath(cons_xpath) if cons_xpath else []
-
                         # URL 추출
                         url_xpath = self.xpaths.get('similar_product_url', {}).get('xpath')
                         similar_product_url = container.xpath(url_xpath)[0] if url_xpath and container.xpath(url_xpath) else None
 
-                        # 유사 제품 데이터 저장 (제품명이 있는 경우만)
                         if name:
-                            similar_products_data.append({
+                            products_basic_info.append({
                                 'name': name,
-                                'pros': pros_list,  # 리스트 그대로 저장
-                                'cons': cons_list,  # 리스트 그대로 저장
                                 'url': similar_product_url
                             })
                             similar_product_names.append(name)
+
+                    # 2단계: Pros/Cons 테이블에서 추출 (각 제품 위치에 맞춰)
+                    # 데이터베이스에서 조회한 xpath 사용
+                    pros_row_xpath = self.xpaths.get('pros', {}).get('xpath')
+                    cons_row_xpath = self.xpaths.get('cons', {}).get('xpath')
+
+                    pros_cells = tree.xpath(pros_row_xpath) if pros_row_xpath else []
+                    cons_cells = tree.xpath(cons_row_xpath) if cons_row_xpath else []
+
+                    if pros_cells or cons_cells:
+                        # 각 제품의 pros/cons를 리스트로 추출
+                        for idx, product_info in enumerate(products_basic_info):
+                            # 해당 제품 위치의 pros 셀
+                            pros_list = []
+                            if idx < len(pros_cells):
+                                pros_cell = pros_cells[idx]
+                                # 셀 안의 li 태그들 추출
+                                pros_items = pros_cell.xpath('.//li/text()')
+                                pros_list = [p.strip() for p in pros_items if p.strip()]
+
+                            # 해당 제품 위치의 cons 셀
+                            cons_list = []
+                            if idx < len(cons_cells):
+                                cons_cell = cons_cells[idx]
+                                # 셀 안의 li 태그들 추출
+                                cons_items = cons_cell.xpath('.//li/text()')
+                                cons_list = [c.strip() for c in cons_items if c.strip()]
+
+                            # 유사 제품 데이터 저장
+                            similar_products_data.append({
+                                'name': product_info['name'],
+                                'pros': pros_list,  # 리스트로 저장
+                                'cons': cons_list,  # 리스트로 저장
+                                'url': product_info['url']
+                            })
+                    else:
+                        # 테이블이 없으면 pros/cons 없이 저장
+                        for product_info in products_basic_info:
+                            similar_products_data.append({
+                                'name': product_info['name'],
+                                'pros': [],
+                                'cons': [],
+                                'url': product_info['url']
+                            })
 
                     # 모든 유사 제품명을 ||| 구분자로 연결
                     retailer_sku_name_similar = '|||'.join(similar_product_names) if similar_product_names else None
