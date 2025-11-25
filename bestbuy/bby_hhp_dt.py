@@ -428,36 +428,52 @@ class BestBuyDetailCrawler(BaseCrawler):
             if reviews_button_xpath:
                 review_button_found = False
 
-                # 최대 3번 시도
-                for attempt in range(1, 4):
-                    try:
-                        print(f"[INFO] Attempt {attempt}/3: Trying to find review button")
+                # 페이지 상단으로 이동
+                print(f"[INFO] Scrolling to top of page to search for review button")
+                self.driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(1)
 
-                        # 페이지 스크롤 (시도할 때마다 조금씩 다른 위치로)
-                        scroll_distance = 300 + (attempt * 200)
-                        self.driver.execute_script(f"window.scrollTo(0, {scroll_distance});")
+                # 페이지 아래로 스크롤하면서 리뷰 버튼 찾기
+                max_scroll_attempts = 20  # 최대 20번 스크롤 시도
+                scroll_step = 300  # 한 번에 300px씩 스크롤
+
+                for scroll_attempt in range(max_scroll_attempts):
+                    try:
+                        print(f"[INFO] Scroll attempt {scroll_attempt + 1}/{max_scroll_attempts}: Searching for review button...")
+
+                        # 현재 위치에서 리뷰 버튼 찾기 시도 (짧은 타임아웃)
+                        review_button = WebDriverWait(self.driver, 2).until(
+                            EC.presence_of_element_located((By.XPATH, reviews_button_xpath))
+                        )
+
+                        # 버튼을 찾았으면 화면 중앙으로 스크롤
+                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", review_button)
                         time.sleep(1)
 
-                        # "See All Customer Reviews" 버튼 찾기 (짧은 타임아웃)
+                        # 클릭 가능할 때까지 대기
                         review_button = WebDriverWait(self.driver, 5).until(
                             EC.element_to_be_clickable((By.XPATH, reviews_button_xpath))
                         )
 
-                        # 버튼이 화면에 보이도록 스크롤
-                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", review_button)
-                        time.sleep(1)
-
-                        print(f"[INFO] Review button found, clicking to navigate to review page")
+                        print(f"[INFO] Review button found at scroll position, clicking to navigate to review page")
                         review_button.click()
                         review_button_found = True
                         break  # 성공하면 루프 종료
 
                     except Exception as e:
-                        print(f"[WARNING] Attempt {attempt}/3 failed: {e}")
-                        if attempt == 3:
-                            print(f"[WARNING] Could not find review button after 3 attempts, skipping review extraction")
-                        else:
-                            time.sleep(1)  # 다음 시도 전 대기
+                        # 버튼을 못 찾았으면 아래로 스크롤
+                        current_scroll = self.driver.execute_script("return window.pageYOffset;")
+                        self.driver.execute_script(f"window.scrollBy(0, {scroll_step});")
+                        time.sleep(0.5)
+
+                        # 페이지 끝에 도달했는지 확인
+                        new_scroll = self.driver.execute_script("return window.pageYOffset;")
+                        if current_scroll == new_scroll:
+                            print(f"[WARNING] Reached end of page without finding review button")
+                            break
+
+                if not review_button_found:
+                    print(f"[WARNING] Could not find review button after scrolling entire page, skipping review extraction")
 
                 # 버튼을 찾았을 때만 리뷰 추출
                 if review_button_found:

@@ -141,6 +141,9 @@ class BaseCrawler:
         """
         chrome_options = Options()
 
+        # Page Load Strategy 설정 (동적 페이지 로딩 최적화)
+        chrome_options.page_load_strategy = 'none'  # 전체 페이지 로드를 기다리지 않음
+
         # 자동화 감지 방지
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -159,6 +162,9 @@ class BaseCrawler:
 
         service = Service(ChromeDriverManager().install())
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
+
+        # 페이지 로드 타임아웃 설정 (120초)
+        self.driver.set_page_load_timeout(120)
 
         # 자동화 감지 방지 스크립트 실행
         self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
