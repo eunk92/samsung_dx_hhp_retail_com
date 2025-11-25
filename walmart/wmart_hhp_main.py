@@ -135,10 +135,9 @@ class WalmartMainCrawler:
         try:
             self.playwright = sync_playwright().start()
 
-            # Chrome 브라우저 사용
+            # Chromium 브라우저 사용
             self.browser = self.playwright.chromium.launch(
                 headless=False,
-                channel="chrome",
                 args=[
                     '--disable-blink-features=AutomationControlled',
                     '--disable-dev-shm-usage',
