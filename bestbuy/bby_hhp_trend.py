@@ -43,8 +43,7 @@ class BestBuyTrendCrawler(BaseCrawler):
         self.current_rank = 0  # 추출 순서대로 rank 부여
 
         # 테스트 설정
-        self.test_page = 1
-        self.test_count = 1
+        self.test_count = 3  # 테스트 모드 목표: 3개 제품 수집
 
     def initialize(self):
         """
@@ -54,7 +53,7 @@ class BestBuyTrendCrawler(BaseCrawler):
         """
         print("\n" + "="*60)
         print(f"[INFO] BestBuy Trending Deals Crawler Initialization")
-        print(f"[INFO] Test Mode: {'ON (1 product)' if self.test_mode else 'OFF (all products)'}")
+        print(f"[INFO] Test Mode: {'ON (' + str(self.test_count) + ' products)' if self.test_mode else 'OFF (all products)'}")
         print("="*60 + "\n")
 
         # 1. DB 연결
@@ -99,29 +98,45 @@ class BestBuyTrendCrawler(BaseCrawler):
             url = self.url_template
             print(f"\n[INFO] Crawling Trending Deals page: {url}")
 
-            # 페이지 로드
-            self.driver.get(url)
-            time.sleep(30)
-
-            # HTML 파싱
-            page_html = self.driver.page_source
-            tree = html.fromstring(page_html)
-
             # 제품 리스트 XPath
             base_container_xpath = self.xpaths.get('base_container', {}).get('xpath')
             if not base_container_xpath:
                 print("[ERROR] base_container XPath not found")
                 return []
 
-            # 제품 아이템 추출
-            base_containers = tree.xpath(base_container_xpath)
-            print(f"[INFO] Found {len(base_containers)} trending products")
+            # 페이지 로드
+            self.driver.get(url)
+            time.sleep(30)
 
-            # 테스트 모드일 때는 설정된 범위만, 운영 모드일 때는 전체 처리
-            if self.test_mode:
-                containers_to_process = base_containers[:self.test_count]
-            else:
-                containers_to_process = base_containers
+            # 제품 추출 (최대 3번 시도, 리로드 없이 HTML 재파싱)
+            base_containers = []
+            max_retries = 3
+            expected_products = 10  # Trend 페이지 기준 10개 제품
+
+            for attempt in range(1, max_retries + 1):
+                # HTML 파싱
+                page_html = self.driver.page_source
+                tree = html.fromstring(page_html)
+
+                # 제품 아이템 추출
+                base_containers = tree.xpath(base_container_xpath)
+                print(f"[INFO] Found {len(base_containers)} trending products (attempt {attempt}/{max_retries})")
+
+                # 10개 이상 로드되었으면 성공
+                if len(base_containers) >= expected_products:
+                    print(f"[INFO] All products loaded successfully")
+                    break
+
+                # 10개 미만이면 대기 후 재파싱
+                if attempt < max_retries:
+                    print(f"[WARNING] Only {len(base_containers)} products found, waiting 10s and retrying...")
+                    time.sleep(10)  # 10초 대기 후 재파싱
+                else:
+                    print(f"[WARNING] Could not load {expected_products} products after {max_retries} attempts, proceeding with {len(base_containers)} products")
+
+            # 목표 제품 수 설정 (테스트/운영 모드에 따라)
+            target_products = self.test_count if self.test_mode else len(base_containers)
+            containers_to_process = base_containers[:target_products]
 
             products = []
             for item in containers_to_process:
@@ -162,7 +177,8 @@ class BestBuyTrendCrawler(BaseCrawler):
     def save_products(self, products):
         """
         수집된 제품 데이터를 bby_hhp_product_list 테이블에 저장
-        - Trending Deals는 매번 새로운 데이터로 INSERT (중복 확인 없음)
+        - 중복 확인: batch_id + product_url 조합으로 체크
+        - 존재하면 UPDATE (trend_rank만), 없으면 INSERT
         - INSERT는 20개씩 배치 처리 (부분 실패 방지)
 
         Args: products (list): 제품 데이터 리스트
@@ -174,67 +190,109 @@ class BestBuyTrendCrawler(BaseCrawler):
         try:
             cursor = self.db_conn.cursor()
             insert_count = 0
+            update_count = 0
 
-            # INSERT 쿼리
-            insert_query = """
-                INSERT INTO bby_hhp_product_list (
-                    account_name, page_type, retailer_sku_name,
-                    final_sku_price, savings, comparable_pricing, trend_rank,
-                    product_url, calendar_week, crawl_strdatetime, batch_id
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            # 1단계: UPDATE와 INSERT 분리
+            products_to_update = []
+            products_to_insert = []
+
+            for product in products:
+                # 중복 확인 (batch_id + product_url)
+                exists = self.check_product_exists(
+                    self.account_name,
+                    product['batch_id'],
+                    product['product_url']
                 )
+
+                if exists:
+                    products_to_update.append(product)
+                else:
+                    products_to_insert.append(product)
+
+            # 2단계: UPDATE 처리 (개별 실행)
+            update_query = """
+                UPDATE bby_hhp_product_list
+                SET trend_rank = %s
+                WHERE account_name = %s
+                  AND batch_id = %s
+                  AND product_url = %s
             """
 
-            BATCH_SIZE = 20
-
-            # 20개씩 배치 처리
-            for batch_start in range(0, len(products), BATCH_SIZE):
-                batch_end = min(batch_start + BATCH_SIZE, len(products))
-                batch_products = products[batch_start:batch_end]
-
+            for product in products_to_update:
                 try:
-                    # 배치를 튜플 리스트로 변환
-                    values_list = []
-                    for product in batch_products:
-                        one_product = (
-                            product['account_name'],
-                            product['page_type'],
-                            product['retailer_sku_name'],
-                            product['final_sku_price'],
-                            product['savings'],
-                            product['comparable_pricing'],
-                            product['trend_rank'],
-                            product['product_url'],
-                            product['calendar_week'],
-                            product['crawl_strdatetime'],
-                            product['batch_id']
-                        )
-                        values_list.append(one_product)
-
-                    # 배치 INSERT
-                    cursor.executemany(insert_query, values_list)
+                    cursor.execute(update_query, (
+                        product['trend_rank'],
+                        self.account_name,
+                        product['batch_id'],
+                        product['product_url']
+                    ))
                     self.db_conn.commit()
-
-                    insert_count += len(batch_products)
-                    print(f"[INFO] Inserted batch {batch_start+1}-{batch_end} ({len(batch_products)} products)")
-
-                except Exception as batch_error:
-                    print(f"[ERROR] Failed to insert batch {batch_start+1}-{batch_end}: {batch_error}")
+                    update_count += 1
+                except Exception as update_error:
+                    print(f"[WARNING] Failed to update product {product.get('product_url')}: {update_error}")
                     self.db_conn.rollback()
                     continue
+
+            # 3단계: INSERT 배치 처리 (5개씩)
+            if products_to_insert:
+                insert_query = """
+                    INSERT INTO bby_hhp_product_list (
+                        account_name, page_type, retailer_sku_name,
+                        final_sku_price, savings, comparable_pricing, trend_rank,
+                        product_url, calendar_week, crawl_strdatetime, batch_id
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                """
+
+                BATCH_SIZE = 5
+
+                for batch_start in range(0, len(products_to_insert), BATCH_SIZE):
+                    batch_end = min(batch_start + BATCH_SIZE, len(products_to_insert))
+                    batch_products = products_to_insert[batch_start:batch_end]
+
+                    try:
+                        # 배치를 튜플 리스트로 변환
+                        values_list = []
+                        for product in batch_products:
+                            one_product = (
+                                product['account_name'],
+                                product['page_type'],
+                                product['retailer_sku_name'],
+                                product['final_sku_price'],
+                                product['savings'],
+                                product['comparable_pricing'],
+                                product['trend_rank'],
+                                product['product_url'],
+                                product['calendar_week'],
+                                product['crawl_strdatetime'],
+                                product['batch_id']
+                            )
+                            values_list.append(one_product)
+
+                        # 배치 INSERT
+                        cursor.executemany(insert_query, values_list)
+                        self.db_conn.commit()
+
+                        insert_count += len(batch_products)
+                        print(f"[INFO] Inserted batch {batch_start+1}-{batch_end} ({len(batch_products)} products)")
+
+                    except Exception as batch_error:
+                        print(f"[ERROR] Failed to insert batch {batch_start+1}-{batch_end}: {batch_error}")
+                        self.db_conn.rollback()
+                        continue
 
             cursor.close()
 
             # 진행 상황 요약 출력
-            print(f"[SUCCESS] Saved {insert_count} products to database")
+            print(f"[SUCCESS] Saved {insert_count + update_count} products to database (INSERT: {insert_count}, UPDATE: {update_count})")
             for i, product in enumerate(products[:3], 1):
                 sku_name = product['retailer_sku_name'] or 'N/A'
                 print(f"[{i}] {sku_name[:50]}... - trend_rank: {product['trend_rank']}")
             if len(products) > 3:
                 print(f"... and {len(products) - 3} more products")
 
-            return insert_count
+            return insert_count + update_count
 
         except Exception as e:
             print(f"[ERROR] Failed to save products: {e}")
