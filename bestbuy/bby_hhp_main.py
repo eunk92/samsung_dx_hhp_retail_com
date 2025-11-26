@@ -104,23 +104,26 @@ class BestBuyMainCrawler(BaseCrawler):
 
     def scroll_to_bottom(self):
         """
-        페이지네이션 버튼이 나타날 때까지 스크롤
+        페이지네이션 버튼이 viewport에 나타날 때까지 스크롤
         - 300px씩 점진적으로 스크롤
-        - 페이지네이션이 보이면 스크롤 종료
+        - 페이지네이션이 화면에 보이면 스크롤 종료
         """
         try:
             scroll_step = 300  # 300px씩 스크롤
             current_position = 0
-            max_scroll_attempts = 100  # 무한 루프 방지
-
-            # 페이지네이션 XPath (DB에서 로드)
-            pagination_xpath = self.xpaths.get('pagination', {}).get('xpath')
+            max_scroll_attempts = 50  # 무한 루프 방지
 
             for _ in range(max_scroll_attempts):
-                # 페이지네이션이 보이는지 확인
-                pagination_elements = self.driver.find_elements(By.XPATH, pagination_xpath)
-                if pagination_elements:
-                    print(f"[INFO] Pagination found, stopping scroll")
+                # 페이지네이션이 현재 viewport에 보이는지 확인 (JavaScript)
+                is_pagination_visible = self.driver.execute_script("""
+                    var elem = document.querySelector("div.pagination-container");
+                    if (!elem) return false;
+                    var rect = elem.getBoundingClientRect();
+                    return (rect.top >= 0 && rect.top <= window.innerHeight);
+                """)
+
+                if is_pagination_visible:
+                    print(f"[INFO] Pagination visible in viewport, stopping scroll")
                     break
 
                 # 300px 아래로 스크롤
