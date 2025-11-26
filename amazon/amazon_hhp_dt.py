@@ -736,6 +736,32 @@ class AmazonDetailCrawler(BaseCrawler):
                 except Exception as e:
                     print(f"[WARNING] Failed to extract rank_2 (fallback): {e}")
 
+            # === 리뷰 관련 필드 추출 (리뷰 섹션 이동 전에 추출) ===
+            try:
+                count_of_reviews_raw = self.extract_with_fallback(tree, self.xpaths.get('count_of_reviews', {}).get('xpath'))
+                count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw, self.account_name)
+            except Exception as e:
+                print(f"[WARNING] Failed to extract count_of_reviews: {e}")
+
+            try:
+                star_rating_raw = self.extract_with_fallback(tree, self.xpaths.get('star_rating', {}).get('xpath'))
+                star_rating = data_extractor.extract_rating(star_rating_raw, self.account_name)
+            except Exception as e:
+                print(f"[WARNING] Failed to extract star_rating: {e}")
+
+            try:
+                count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
+                count_of_star_ratings = data_extractor.extract_star_ratings_count(tree, count_of_reviews, count_of_star_ratings_xpath, self.account_name)
+            except Exception as e:
+                print(f"[WARNING] Failed to extract count_of_star_ratings: {e}")
+
+            try:
+                # summarized_review_content: AI 요약 리뷰 (Detail 페이지에서 추출 - 리뷰 페이지 이동 전)
+                summarized_review_content = self.extract_with_fallback(tree, self.xpaths.get('summarized_review_content', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract summarized_review_content: {e}")
+
+            print(f"[INFO] Detail page extraction completed")
 
             # === 리뷰 섹션으로 이동 (리뷰 링크 클릭) ===
             # 상세 페이지 HTML 트리 저장 (폴백용 - 로그인 실패 시 상세 페이지 리뷰 추출)
@@ -763,37 +789,6 @@ class AmazonDetailCrawler(BaseCrawler):
                 print(f"[INFO] Navigated to review section")
             except Exception as e:
                 print(f"[WARNING] Could not navigate to review section: {e}")
-
-            # === 리뷰수/별점/별점별리뷰수 데이터 추출 및 후처리 ===
-            try:
-                # count_of_reviews: 원본 추출 후 리뷰 개수 추출
-                count_of_reviews_raw = self.extract_with_fallback(tree, self.xpaths.get('count_of_reviews', {}).get('xpath'))
-                count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
-            except Exception as e:
-                print(f"[WARNING] Failed to extract count_of_reviews: {e}")
-
-            try:
-                # star_rating: 원본 추출 후 별점 추출
-                star_rating_raw = self.extract_with_fallback(tree, self.xpaths.get('star_rating', {}).get('xpath'))
-                star_rating = data_extractor.extract_rating(star_rating_raw)
-            except Exception as e:
-                print(f"[WARNING] Failed to extract star_rating: {e}")
-
-            try:
-                # count_of_star_ratings: 별점 분포 계산
-                count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
-                count_of_star_ratings = data_extractor.extract_star_ratings_count(tree, count_of_reviews, count_of_star_ratings_xpath, self.account_name)
-            except Exception as e:
-                print(f"[WARNING] Failed to extract count_of_star_ratings: {e}")
-
-            # === Detail 페이지에서 추출 가능한 모든 필드 ===
-            try:
-                # summarized_review_content: AI 요약 리뷰 (Detail 페이지)
-                summarized_review_content = self.extract_with_fallback(tree, self.xpaths.get('summarized_review_content', {}).get('xpath'))
-            except Exception as e:
-                print(f"[WARNING] Failed to extract summarized_review_content: {e}")
-
-            print(f"[INFO] Detail page extraction completed")
 
             # === STEP 2: 리뷰 페이지로 이동하여 detailed_review_content 추출 ===
             # detail_page_tree: 로그인 실패 시 상세 페이지에서 리뷰 추출하는 폴백용
