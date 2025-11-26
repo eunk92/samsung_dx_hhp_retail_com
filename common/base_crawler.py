@@ -7,6 +7,7 @@ import psycopg2
 import time
 import glob
 import os
+import sys
 import pickle
 from datetime import datetime, timedelta
 import pytz
@@ -17,6 +18,29 @@ from webdriver_manager.chrome import ChromeDriverManager
 from lxml import html
 
 from config import DB_CONFIG
+
+
+class TeeLogger:
+    """
+    stdout을 콘솔과 파일 양쪽에 출력하는 클래스
+    통합 크롤러에서 모든 print() 출력을 로그 파일에 저장
+    """
+
+    def __init__(self, log_file_path):
+        self.terminal = sys.stdout
+        self.log_file = open(log_file_path, 'w', encoding='utf-8')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log_file.write(message)
+        self.log_file.flush()  # 즉시 파일에 기록
+
+    def flush(self):
+        self.terminal.flush()
+        self.log_file.flush()
+
+    def close(self):
+        self.log_file.close()
 
 
 class BaseCrawler:
@@ -30,6 +54,61 @@ class BaseCrawler:
         self.driver = None
         self.db_conn = None
         self.xpaths = {}
+        self.tee_logger = None
+        self.original_stdout = None
+
+    def start_logging(self, account_name, batch_id):
+        """
+        콘솔 출력을 파일에도 저장하기 시작
+
+        쓰임새:
+        - 통합 크롤러 시작 시 호출
+        - 이후 모든 print() 출력이 콘솔과 파일 양쪽에 기록됨
+
+        Args:
+            account_name (str): 쇼핑몰명 (Amazon, Bestbuy, Walmart)
+            batch_id (str): 배치 ID
+
+        Returns:
+            str: 로그 파일 경로
+        """
+        try:
+            # logs 폴더 경로 (프로젝트 루트/logs/{쇼핑몰명})
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            shop_folder = account_name.lower()
+            logs_dir = os.path.join(project_root, 'logs', shop_folder)
+            os.makedirs(logs_dir, exist_ok=True)
+
+            # 로그 파일명: {쇼핑몰명}_{batch_id}.txt
+            log_file_path = os.path.join(logs_dir, f"{shop_folder}_{batch_id}.txt")
+
+            # TeeLogger 시작
+            self.original_stdout = sys.stdout
+            self.tee_logger = TeeLogger(log_file_path)
+            sys.stdout = self.tee_logger
+
+            return log_file_path
+
+        except Exception as e:
+            print(f"[WARNING] Failed to start logging: {e}")
+            return None
+
+    def stop_logging(self):
+        """
+        콘솔 출력 파일 저장 종료
+
+        쓰임새:
+        - 통합 크롤러 종료 시 호출
+        - stdout을 원래대로 복원하고 로그 파일 닫기
+        """
+        try:
+            if self.tee_logger and self.original_stdout:
+                sys.stdout = self.original_stdout
+                self.tee_logger.close()
+                self.tee_logger = None
+                self.original_stdout = None
+        except Exception as e:
+            print(f"[WARNING] Failed to stop logging: {e}")
 
     def connect_db(self):
         """
@@ -228,6 +307,14 @@ class BaseCrawler:
         """
         result = self.extract_text_safe(element, xpath)
         return result if result is not None else default
+
+    def safe_extract(self, element, field_name):
+        """필드 추출 시 예외 발생하면 None 반환 후 다음 필드로 진행"""
+        try:
+            return self.extract_with_fallback(element, self.xpaths.get(field_name, {}).get('xpath'))
+        except Exception as e:
+            print(f"[WARNING] Failed to extract {field_name}: {e}")
+            return None
 
     def generate_batch_id(self, account_name):
         """
@@ -525,58 +612,6 @@ class BaseCrawler:
         except Exception as e:
             print(f"[ERROR] Failed to update product rank: {e}")
             return False
-
-    def save_log(self, account_name, batch_id, start_time, end_time, crawl_results, resume_from=None):
-        """
-        통합 크롤러 실행 결과를 로그 파일로 저장
-
-        쓰임새:
-        - 통합 크롤러 종료 시 실행 결과를 텍스트 파일로 저장
-        - logs/{쇼핑몰명}/{쇼핑몰명}_{batch_id}.txt 형식으로 저장
-
-        Args:
-            account_name (str): 쇼핑몰명 (Amazon, Bestbuy, Walmart)
-            batch_id (str): 배치 ID
-            start_time (datetime): 크롤링 시작 시간
-            end_time (datetime): 크롤링 종료 시간
-            crawl_results (dict): 각 단계별 결과 {'main': True/False/'skipped', ...}
-            resume_from (str): 재시작 단계 (옵션)
-
-        Returns:
-            None
-        """
-        try:
-            # logs 폴더 경로 (프로젝트 루트/logs/{쇼핑몰명})
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            shop_folder = account_name.lower()
-            logs_dir = os.path.join(project_root, 'logs', shop_folder)
-            os.makedirs(logs_dir, exist_ok=True)
-
-            # 로그 파일명: {쇼핑몰명}_{batch_id}.txt
-            log_file = os.path.join(logs_dir, f"{shop_folder}_{batch_id}.txt")
-
-            # 소요 시간 계산
-            elapsed = (end_time - start_time).total_seconds()
-
-            with open(log_file, 'w', encoding='utf-8') as f:
-                f.write("="*60 + "\n")
-                f.write(f"{account_name} Integrated Crawler\n")
-                f.write("="*60 + "\n")
-                f.write(f"batch_id: {batch_id}\n")
-                f.write(f"start_time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"end_time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"elapsed: {elapsed/60:.1f}분\n")
-                if resume_from:
-                    f.write(f"resume_from: {resume_from}\n")
-                f.write("\n[Results]\n")
-                for step, result in crawl_results.items():
-                    status = "SKIP" if result == 'skipped' else "OK" if result else "FAIL"
-                    f.write(f"  {step}: {status}\n")
-                f.write("="*60 + "\n")
-
-            print(f"[LOG] {log_file}")
-        except Exception as e:
-            print(f"[WARNING] Failed to save log: {e}")
 
     def retry_on_network_error(self, func, max_retries=3, delay=5):
         """

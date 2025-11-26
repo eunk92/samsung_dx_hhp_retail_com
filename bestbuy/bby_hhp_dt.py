@@ -1,10 +1,23 @@
 """
 BestBuy Detail 페이지 크롤러
-- 통합 크롤러에서 batch_id를 전달받아 실행
+
+================================================================================
+실행 모드
+================================================================================
+- 개별 실행: batch_id=None (하드코딩된 batch_id 사용)
+- 통합 크롤러: batch_id를 파라미터로 전달
+
+================================================================================
+주요 기능
+================================================================================
 - product_list 테이블에서 해당 batch_id의 제품 URL 조회
 - 각 제품 상세 페이지에서 리뷰, 별점, 스펙 등 추출
 - Main/BSR/Trend에서 수집한 모든 제품 처리
-- hhp_retail_com 테이블에 저장
+
+================================================================================
+저장 테이블
+================================================================================
+- hhp_retail_com (상세 정보 + 리뷰)
 """
 
 import sys
@@ -12,6 +25,7 @@ import os
 import time
 import random
 import traceback
+import re
 from datetime import datetime
 from lxml import html
 from selenium.webdriver.support.ui import WebDriverWait
@@ -33,187 +47,113 @@ class BestBuyDetailCrawler(BaseCrawler):
     """
 
     def __init__(self, batch_id=None):
-        """
-        초기화
-
-        Args:
-            batch_id (str): 배치 ID (필수)
-                           - 통합 크롤러에서 전달된 배치 ID 사용
-        """
+        """초기화. batch_id: 통합 크롤러에서 전달"""
         super().__init__()
         self.account_name = 'Bestbuy'
         self.page_type = 'detail'
         self.batch_id = batch_id
 
     def initialize(self):
-        """
-        크롤러 초기화 작업
-
-        Returns: bool: 초기화 성공 시 True, 실패 시 False
-        """
-        print("\n" + "="*60)
-        print(f"[INFO] BestBuy Detail Crawler Initialization")
-        print("="*60 + "\n")
-
-        # 1. 배치 ID 설정 (없으면 기본값 사용)
+        """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
         if not self.batch_id:
             self.batch_id = 'b_20251126_025003'
-            print(f"[INFO] Using default Batch ID: {self.batch_id}")
-        else:
-            print(f"[INFO] Batch ID received: {self.batch_id}")
 
-        # 2. DB 연결
         if not self.connect_db():
             return False
-
-        # 3. XPath 셀렉터 로드
         if not self.load_xpaths(self.account_name, self.page_type):
             return False
 
-        # 4. WebDriver 설정
         self.setup_driver()
-
-        # 5. 오래된 로그 정리
         self.cleanup_old_logs()
 
         return True
 
     def load_product_list(self):
-        """
-        bby_hhp_product_list 테이블에서 제품 URL 및 기본 정보 조회
-
-        Returns: list: 제품 정보 리스트
-        """
+        """product_list 조회: batch_id 기준으로 제품 URL 및 기본 정보 조회"""
         try:
             cursor = self.db_conn.cursor()
 
-            # product_list에서 hhp_retail_com으로 매핑할 필드 조회
             query = """
                 SELECT
-                    page_type,
-                    retailer_sku_name,
-                    final_sku_price,
-                    savings,
-                    comparable_pricing as original_sku_price,
-                    offer,
-                    pick_up_availability,
-                    shipping_availability,
-                    delivery_availability,
-                    sku_status,
-                    promotion_type,
-                    main_rank,
-                    bsr_rank,
-                    trend_rank,
-                    product_url,
-                    calendar_week
+                    page_type, retailer_sku_name, final_sku_price, savings,
+                    comparable_pricing as original_sku_price, offer,
+                    pick_up_availability, shipping_availability, delivery_availability,
+                    sku_status, promotion_type, main_rank, bsr_rank, trend_rank,
+                    product_url, calendar_week
                 FROM bby_hhp_product_list
-                WHERE account_name = %s
-                  AND batch_id = %s
-                  AND product_url IS NOT NULL
+                WHERE account_name = %s AND batch_id = %s AND product_url IS NOT NULL
                 ORDER BY id
             """
 
             cursor.execute(query, (self.account_name, self.batch_id))
             rows = cursor.fetchall()
-
             cursor.close()
 
-            # 딕셔너리 변환 (SELECT 컬럼 순서와 일치)
             product_list = []
             for row in rows:
                 product = {
                     'account_name': self.account_name,
-                    'page_type': row[0],              # page_type
-                    'retailer_sku_name': row[1],      # retailer_sku_name
-                    'final_sku_price': row[2],        # final_sku_price
-                    'savings': row[3],                # savings
-                    'original_sku_price': row[4],     # comparable_pricing as original_sku_price
-                    'offer': row[5],                  # offer
-                    'pick_up_availability': row[6],   # pick_up_availability
-                    'shipping_availability': row[7],  # shipping_availability
-                    'delivery_availability': row[8],  # delivery_availability
-                    'sku_status': row[9],             # sku_status
-                    'promotion_type': row[10],        # promotion_type
-                    'main_rank': row[11],             # main_rank
-                    'bsr_rank': row[12],              # bsr_rank
-                    'trend_rank': row[13],            # trend_rank
-                    'product_url': row[14],           # product_url
-                    'calendar_week': row[15]          # calendar_week
+                    'page_type': row[0],
+                    'retailer_sku_name': row[1],
+                    'final_sku_price': row[2],
+                    'savings': row[3],
+                    'original_sku_price': row[4],
+                    'offer': row[5],
+                    'pick_up_availability': row[6],
+                    'shipping_availability': row[7],
+                    'delivery_availability': row[8],
+                    'sku_status': row[9],
+                    'promotion_type': row[10],
+                    'main_rank': row[11],
+                    'bsr_rank': row[12],
+                    'trend_rank': row[13],
+                    'product_url': row[14],
+                    'calendar_week': row[15]
                 }
                 product_list.append(product)
 
-            print(f"[INFO] Loaded {len(product_list)} products from bby_hhp_product_list")
+            print(f"[INFO] Loaded {len(product_list)} products")
             return product_list
 
         except Exception as e:
             print(f"[ERROR] Failed to load product list: {e}")
-            traceback.print_exc()
             return []
 
     def extract_item_from_url(self, product_url):
-        """
-        BestBuy product_url에서 item (SKU ID) 추출
-        Args: product_url (str): 제품 URL
-        Returns: str: 추출된 SKU ID 또는 None
-        """
-        import re
-
+        """URL에서 item (SKU ID) 추출"""
         if not product_url:
             return None
 
         try:
-            # Step 1: /sku/숫자 또는 /sku/숫자/openbox?... 패턴 제거
             cleaned_url = re.sub(r'/sku/\d+(/openbox\?.*)?$', '', product_url)
-
-            # Step 2: 쿼리 파라미터 제거 (? 이후 제거)
             cleaned_url = cleaned_url.split('?')[0]
-
-            # Step 3: 마지막 '/' 뒷부분 추출
             parts = cleaned_url.split('/')
             if not parts:
                 return None
-
-            # 마지막 부분이 item
             item = parts[-1]
-
-            # 빈 문자열이면 None 반환
-            if not item:
-                return None
-
-            return item
-
-        except Exception as e:
-            print(f"[WARNING] Failed to extract item from URL {product_url}: {e}")
+            return item if item else None
+        except Exception:
             return None
 
     def crawl_detail(self, product):
-        """
-        제품 상세 페이지 크롤링
-        Args: product (dict): product_list에서 조회한 제품 정보
-        Returns: dict: 결합된 제품 데이터 (product_list + Detail 필드)
-        """
+        """상세 페이지 크롤링: 페이지 로드 → 스크롤 전 추출 → 스펙 추출 → 유사제품 추출 → 리뷰 추출 → product_list + detail 데이터 결합"""
         try:
             product_url = product.get('product_url')
             if not product_url:
-                print("[WARNING] Product URL is missing, skipping")
                 return product
 
-            # 상세 페이지 로드
             self.driver.get(product_url)
+            time.sleep(random.uniform(8, 12))
 
-            # TV 크롤러와 동일한 간단한 대기 방식
-            print("[INFO] Waiting for page to load...")
-            time.sleep(random.uniform(8, 12))  # 8~12초 랜덤 대기
-            print("[INFO] Page load complete")
-
-            # HTML 파싱
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
 
-            # item: product_url에서 추출 (우선) 또는 XPath에서 추출 (fallback)
             item = self.extract_item_from_url(product_url)
 
-            # ========== 1단계: HHP 스펙 추출 (specs_button 클릭 후 모달에서 추출) ==========
+            # ========== 1단계: 스크롤 전 추출 필드 ==========
+            trade_in = self.extract_with_fallback(tree, self.xpaths.get('trade_in', {}).get('xpath'))
+
+            # ========== 2단계: HHP 스펙 추출 (specs_button 클릭 후 모달에서 추출) ==========
             hhp_carrier = None
             hhp_storage = None
             hhp_color = None
@@ -222,182 +162,117 @@ class BestBuyDetailCrawler(BaseCrawler):
             if specs_button_xpath:
                 specs_button_found = False
 
-                # 최대 3번 시도
                 for attempt in range(1, 4):
                     try:
-                        print(f"[INFO] Attempt {attempt}/3: Trying to find specs button")
-
-                        # 페이지 스크롤 (시도할 때마다 조금씩 다른 위치로)
                         scroll_distance = 800 + (attempt * 300)
                         self.driver.execute_script(f"window.scrollTo(0, {scroll_distance});")
                         time.sleep(1)
 
-                        # Specs 버튼 찾기 (짧은 타임아웃)
                         specs_button = WebDriverWait(self.driver, 5).until(
                             EC.element_to_be_clickable((By.XPATH, specs_button_xpath))
                         )
-
-                        # 버튼이 화면에 보이도록 추가 스크롤
                         self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", specs_button)
                         time.sleep(1)
 
-                        print(f"[INFO] Specs button found, clicking to open modal")
                         specs_button.click()
                         specs_button_found = True
-                        break  # 성공하면 루프 종료
-
-                    except Exception as e:
-                        print(f"[WARNING] Attempt {attempt}/3 failed: {e}")
+                        break
+                    except Exception:
                         if attempt == 3:
-                            print(f"[WARNING] Could not find specs button after 3 attempts, skipping HHP specs extraction")
+                            pass
                         else:
-                            time.sleep(1)  # 다음 시도 전 대기
+                            time.sleep(1)
 
-                # 버튼을 찾았을 때만 모달 처리
                 if specs_button_found:
                     try:
-                        # 모달이 완전히 로드될 때까지 대기 (carrier/storage/color 중 하나라도 나타날 때까지)
                         try:
                             WebDriverWait(self.driver, 10).until(
                                 lambda driver: driver.find_elements(By.XPATH, self.xpaths.get('hhp_carrier', {}).get('xpath', '//dummy')) or
                                                driver.find_elements(By.XPATH, self.xpaths.get('hhp_storage', {}).get('xpath', '//dummy')) or
                                                driver.find_elements(By.XPATH, self.xpaths.get('hhp_color', {}).get('xpath', '//dummy'))
                             )
-                            print(f"[INFO] Specs modal fully loaded")
                         except Exception:
-                            print(f"[WARNING] Timeout waiting for specs modal, proceeding anyway...")
                             time.sleep(3)
 
-                        # 모달 HTML 파싱
                         modal_html = self.driver.page_source
                         modal_tree = html.fromstring(modal_html)
 
-                        # 모달에서 스펙 추출
                         hhp_carrier = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
                         hhp_storage = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
                         hhp_color = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_color', {}).get('xpath'))
 
-                        print(f"[INFO] Extracted specs - Carrier: {hhp_carrier}, Storage: {hhp_storage}, Color: {hhp_color}")
-
-                        # 스펙 모달창 닫기 (닫기 버튼 클릭)
+                        # 스펙 모달창 닫기
                         try:
-                            # data-testid="brix-sheet-closeButton" 또는 aria-label="Close Sheet"로 닫기 버튼 찾기
                             close_button_xpath = "//button[@data-testid='brix-sheet-closeButton' or @aria-label='Close Sheet']"
                             close_button = WebDriverWait(self.driver, 5).until(
                                 EC.element_to_be_clickable((By.XPATH, close_button_xpath))
                             )
                             close_button.click()
-                            time.sleep(1)  # 모달이 닫힐 때까지 짧은 대기
-                            print(f"[INFO] Closed specs modal")
-                        except Exception as close_error:
-                            print(f"[WARNING] Failed to close specs modal: {close_error}")
-                            # 닫기 버튼 클릭 실패 시 ESC 키 시도
+                            time.sleep(1)
+                        except Exception:
                             try:
                                 from selenium.webdriver.common.keys import Keys
                                 self.driver.find_element("tag name", "body").send_keys(Keys.ESCAPE)
                                 time.sleep(1)
-                                print(f"[INFO] Closed specs modal using ESC key")
                             except Exception:
-                                print(f"[WARNING] Could not close modal, proceeding anyway...")
+                                pass
 
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract specs from modal: {e}")
+                    except Exception:
+                        pass
 
-            # ========== 2단계: 유사 제품 추출 (스크롤해서 찾기) ==========
+            # ========== 3단계: 유사 제품 추출 ==========
             similar_products_container_xpath = self.xpaths.get('similar_products_container', {}).get('xpath')
-
             retailer_sku_name_similar = None
 
             if similar_products_container_xpath:
-                # 유사 제품은 페이지 중간(스펙 아래)에 있으므로 현재 위치에서 스크롤하면서 찾기
-                print("[INFO] Scrolling to find similar products section...")
                 similar_products_found = False
-
-                # 현재 스크롤 위치에서 시작
                 current_scroll = self.driver.execute_script("return window.pageYOffset;")
-                scroll_step = 400  # 400px씩 스크롤
+                scroll_step = 400
                 page_height = self.driver.execute_script("return document.body.scrollHeight")
 
-                print(f"[DEBUG] Starting scroll from {current_scroll}px, page height: {page_height}px")
-
-                # 페이지 끝까지 스크롤하면서 찾기 (TV 크롤러 방식)
                 while current_scroll < page_height:
                     try:
-                        # 현재 위치에서 요소 찾기 시도 (타임아웃 없이)
                         similar_elements = self.driver.find_elements(By.XPATH, similar_products_container_xpath)
-
                         if similar_elements:
-                            print(f"[INFO] Similar products section found at scroll position {current_scroll}px")
                             similar_products_found = True
-                            # 요소를 찾았으면 화면에 보이도록 스크롤
                             self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", similar_elements[0])
-                            time.sleep(2)  # DOM 안정화 대기
+                            time.sleep(2)
                             break
-                    except Exception as e:
-                        print(f"[DEBUG] Search failed at {current_scroll}px: {e}")
+                    except Exception:
+                        pass
 
-                    # 못 찾았으면 계속 스크롤
                     current_scroll += scroll_step
                     self.driver.execute_script(f"window.scrollTo(0, {current_scroll});")
-                    time.sleep(1)  # 스크롤 후 대기 (Lazy Loading)
+                    time.sleep(1)
 
                 if similar_products_found:
-                    # HTML 다시 파싱 (스크롤 후 업데이트된 DOM)
-                    time.sleep(1)  # 최종 안정화 대기
+                    time.sleep(1)
                     page_html = self.driver.page_source
                     tree = html.fromstring(page_html)
-                    print(f"[INFO] Re-parsed HTML after finding similar products")
-                else:
-                    print(f"[WARNING] Could not find similar products section after scrolling entire page")
 
-                # 유사 제품 카드들을 바로 찾기 (similar_products_container가 이미 개별 카드들을 선택함)
                 try:
-                    # similar_products_container XPath로 개별 제품 카드 4개를 바로 찾음
                     product_cards = tree.xpath(similar_products_container_xpath)
-                    print(f"[DEBUG] similar_products_container xpath: {similar_products_container_xpath}")
-                    print(f"[DEBUG] Found {len(product_cards)} product cards")
-
                     if product_cards:
                         similar_product_names = []
-
-                        # 제품명 XPath 가져오기
                         name_xpath = self.xpaths.get('similar_product_name', {}).get('xpath')
-                        print(f"[DEBUG] similar_product_name xpath: {name_xpath}")
 
-                        # 각 제품 카드에서 제품명만 추출
-                        for idx, card in enumerate(product_cards, 1):
+                        for card in product_cards:
                             try:
                                 if name_xpath:
                                     name_results = card.xpath(name_xpath)
                                     if name_results:
-                                        name = name_results[0]
-                                        similar_product_names.append(name)
-                                        print(f"[DEBUG] Product {idx} name: {name}")
-                                    else:
-                                        print(f"[WARNING] Product {idx}: name xpath returned empty")
-                            except Exception as name_error:
-                                print(f"[WARNING] Failed to extract product {idx} name: {name_error}")
+                                        similar_product_names.append(name_results[0])
+                            except Exception:
                                 continue
 
-                        print(f"[INFO] Extracted {len(similar_product_names)} similar product names")
-
-                        # 모든 유사 제품명을 ||| 구분자로 연결
                         retailer_sku_name_similar = ' ||| '.join(similar_product_names) if similar_product_names else None
-                    else:
-                        print(f"[INFO] No similar product cards found")
-                        retailer_sku_name_similar = None
-
-                except Exception as similar_error:
-                    print(f"[WARNING] Failed to extract similar products: {similar_error}")
-                    print(f"[INFO] Continuing with other data extraction...")
+                except Exception:
                     retailer_sku_name_similar = None
 
-            # ========== 3단계: 리뷰 섹션 데이터 추출 (HTML에서) ==========
-            # HTML 다시 파싱 (스크롤 후 업데이트된 DOM)
+            # ========== 4단계: 리뷰 섹션 데이터 추출 ==========
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
 
-            # 리뷰 관련 필드 (data_extractor 후처리)
             count_of_reviews_raw = self.extract_with_fallback(tree, self.xpaths.get('count_of_reviews', {}).get('xpath'))
             count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw, self.account_name)
 
@@ -411,37 +286,24 @@ class BestBuyDetailCrawler(BaseCrawler):
                 self.account_name
             )
 
-            # 기타 필드 추출
-            trade_in = self.extract_with_fallback(tree, self.xpaths.get('trade_in', {}).get('xpath'))
             top_mentions = self.extract_with_fallback(tree, self.xpaths.get('top_mentions', {}).get('xpath'))
-
-            # recommendation_intent 추출 및 후처리
             recommendation_intent_raw = self.extract_with_fallback(tree, self.xpaths.get('recommendation_intent', {}).get('xpath'))
-            recommendation_intent = recommendation_intent_raw + " would recommend to a friend"
-           
-            # ========== 4단계: 리뷰 더보기 버튼 클릭 및 상세 리뷰 추출 ==========
-            # 리뷰 데이터 추출: "See All Customer Reviews" 버튼 클릭 후 추출
+            recommendation_intent = (recommendation_intent_raw + " would recommend to a friend") if recommendation_intent_raw else None
+
+            # ========== 5단계: 리뷰 더보기 버튼 클릭 및 상세 리뷰 추출 ==========
             detailed_review_content = None
             reviews_button_xpath = self.xpaths.get('reviews_button', {}).get('xpath')
-
-            print(f"[DEBUG] reviews_button_xpath: {reviews_button_xpath}")
 
             if reviews_button_xpath:
                 review_button_found = False
 
-                # 페이지 상단으로 이동
-                print(f"[INFO] Scrolling from top to find review button")
                 self.driver.execute_script("window.scrollTo(0, 0);")
                 time.sleep(1)
 
-                # 페이지 전체 높이 계산
                 scroll_height = self.driver.execute_script("return document.body.scrollHeight")
                 current_position = 0
-                scroll_step = 400  # 400px씩 스크롤 (TV 크롤러와 동일)
+                scroll_step = 400
 
-                print(f"[INFO] Page height: {scroll_height}px, starting scroll search...")
-
-                # TV 크롤러처럼 여러 XPath 시도
                 reviews_button_xpaths = [
                     reviews_button_xpath,
                     '//button[contains(., "See All Customer Reviews")]',
@@ -450,98 +312,59 @@ class BestBuyDetailCrawler(BaseCrawler):
                     '//a[contains(text(), "reviews")]'
                 ]
 
-                # 페이지 끝까지 스크롤하면서 리뷰 버튼 찾기
                 while current_position < scroll_height:
-                    # 각 스크롤 위치에서 여러 XPath 시도 (TV 크롤러 방식)
                     for xpath in reviews_button_xpaths:
                         try:
-                            # 현재 위치에서 리뷰 버튼 찾기 시도
                             review_button = self.driver.find_element(By.XPATH, xpath)
-
-                            # 버튼을 찾았으면 화면 중앙으로 스크롤
-                            print(f"[INFO] Review button found at {current_position}px with xpath: {xpath[:50]}...")
                             self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", review_button)
                             time.sleep(2)
 
-                            # JavaScript로 클릭 시도
                             try:
                                 self.driver.execute_script("arguments[0].click();", review_button)
-                                print(f"[INFO] Review button clicked successfully (JS)")
-                                review_button_found = True
-                                time.sleep(5)  # 리뷰 페이지 로딩 대기
-                                break
-                            except Exception as click_err:
-                                print(f"[WARNING] JS click failed: {click_err}, trying normal click")
-                                # 일반 클릭 시도
-                                review_button.click()
-                                print(f"[INFO] Review button clicked successfully (normal)")
                                 review_button_found = True
                                 time.sleep(5)
                                 break
-
-                        except Exception as e:
-                            # 이 xpath로 못 찾으면 다음 xpath 시도
-                            if "no such element" not in str(e).lower():
-                                print(f"[DEBUG] XPath {xpath[:30]}... failed: {e}")
+                            except Exception:
+                                review_button.click()
+                                review_button_found = True
+                                time.sleep(5)
+                                break
+                        except Exception:
                             continue
 
-                    # 버튼을 찾았으면 전체 루프 종료
                     if review_button_found:
                         break
 
-                    # 못 찾았으면 계속 스크롤
                     current_position += scroll_step
                     self.driver.execute_script(f"window.scrollTo(0, {current_position});")
                     time.sleep(0.5)
 
-                if not review_button_found:
-                    print(f"[WARNING] Could not find review button after scrolling entire page, skipping review extraction")
-
-                # 버튼을 찾았을 때만 리뷰 추출
                 if review_button_found:
                     try:
-                        # 리뷰 페이지가 완전히 로드될 때까지 대기
                         detailed_review_xpath = self.xpaths.get('detailed_review_content', {}).get('xpath')
                         if detailed_review_xpath:
                             try:
                                 WebDriverWait(self.driver, 30).until(
                                     lambda driver: driver.find_elements(By.XPATH, detailed_review_xpath)
                                 )
-                                print(f"[INFO] Review page fully loaded")
                             except Exception:
-                                print(f"[WARNING] Timeout waiting for reviews page, proceeding anyway...")
                                 time.sleep(5)
 
-                            # 새 페이지의 HTML 파싱
                             page_html = self.driver.page_source
                             tree = html.fromstring(page_html)
 
-                            # 리뷰 본문 추출 (최대 20개)
                             reviews_list = tree.xpath(detailed_review_xpath)
                             if reviews_list:
-                                # 최대 20개만 추출
                                 reviews_list = reviews_list[:20]
-
-                                # 각 리뷰에서 줄바꿈 제거 및 포맷팅
                                 formatted_reviews = []
                                 for idx, review in enumerate(reviews_list, 1):
-                                    # \r\n과 \n을 공백 하나로 치환
                                     cleaned_review = review.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
-                                    # 연속된 공백을 하나로 정리
                                     cleaned_review = ' '.join(cleaned_review.split())
-                                    # review1 - 내용 형식으로 저장
                                     formatted_reviews.append(f"review{idx} - {cleaned_review}")
 
-                                # ||| 구분자로 연결
                                 detailed_review_content = ' ||| '.join(formatted_reviews)
-                                print(f"[INFO] Extracted {len(reviews_list)} reviews")
-                            else:
-                                print(f"[WARNING] No reviews found on review page")
-                        else:
-                            print(f"[WARNING] detailed_review_content xpath not found")
-                    except Exception as e:
-                        print(f"[WARNING] Failed to extract reviews from page: {e}")
- 
+                    except Exception:
+                        pass
 
             # 결합된 데이터
             combined_data = product.copy()
@@ -563,19 +386,11 @@ class BestBuyDetailCrawler(BaseCrawler):
             return combined_data
 
         except Exception as e:
-            print(f"[ERROR] Failed to crawl detail page {product.get('product_url')}: {e}")
-            traceback.print_exc()
-            # 에러 발생 시 product_list 데이터만 반환
+            print(f"[ERROR] Detail crawl failed: {e}")
             return product
 
     def save_to_retail_com(self, products):
-        """
-        hhp_retail_com 테이블에 저장
-
-        Args: products (list): 결합된 제품 데이터 리스트
-
-        Returns: int: 저장된 제품 수
-        """
+        """DB 저장: 2-tier retry (BATCH_SIZE=5 → 1개씩)"""
         if not products:
             return 0
 
@@ -607,154 +422,110 @@ class BestBuyDetailCrawler(BaseCrawler):
                 )
             """
 
+            BATCH_SIZE = 5
             saved_count = 0
 
-            for product in products:
+            def product_to_tuple(product):
+                return (
+                    'US', 'HHP', product.get('item'), self.account_name, product.get('page_type'),
+                    product.get('count_of_reviews'), product.get('retailer_sku_name'), product.get('product_url'),
+                    product.get('star_rating'), product.get('count_of_star_ratings'), product.get('sku_popularity'),
+                    product.get('final_sku_price'), product.get('original_sku_price'), product.get('savings'), product.get('discount_type'),
+                    product.get('offer'), product.get('bundle'),
+                    product.get('pick_up_availability'), product.get('shipping_availability'), product.get('delivery_availability'),
+                    product.get('inventory_status'), product.get('sku_status'),
+                    product.get('retailer_membership_discounts'), product.get('trade_in'), product.get('recommendation_intent'),
+                    product.get('hhp_storage'), product.get('hhp_color'), product.get('hhp_carrier'),
+                    product.get('detailed_review_content'), product.get('summarized_review_content'), product.get('top_mentions'),
+                    product.get('retailer_sku_name_similar'),
+                    product.get('main_rank'), product.get('bsr_rank'), product.get('trend_rank'),
+                    product.get('promotion_type'),
+                    product.get('calendar_week'), current_time, self.batch_id
+                )
+
+            for batch_start in range(0, len(products), BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, len(products))
+                batch_products = products[batch_start:batch_end]
+
                 try:
-                    print(f"[DEBUG] Inserting product: {product.get('retailer_sku_name', 'N/A')[:50]}")
+                    values_list = [product_to_tuple(p) for p in batch_products]
+                    cursor.executemany(insert_query, values_list)
+                    self.db_conn.commit()
+                    saved_count += len(batch_products)
 
-                    cursor.execute(insert_query, (
-                        'US',
-                        'HHP',
-                        product.get('item'),
-                        self.account_name,
-                        product.get('page_type'),
-                        product.get('count_of_reviews'),
-                        product.get('retailer_sku_name'),
-                        product.get('product_url'),
-                        product.get('star_rating'),
-                        product.get('count_of_star_ratings'),
-                        product.get('sku_popularity'),
-                        product.get('final_sku_price'),
-                        product.get('original_sku_price'),
-                        product.get('savings'),
-                        product.get('discount_type'),
-                        product.get('offer'),
-                        product.get('bundle'),
-                        product.get('pick_up_availability'),
-                        product.get('shipping_availability'),
-                        product.get('delivery_availability'),
-                        product.get('inventory_status'),
-                        product.get('sku_status'),
-                        product.get('retailer_membership_discounts'),
-                        product.get('trade_in'),
-                        product.get('recommendation_intent'),
-                        product.get('hhp_storage'),
-                        product.get('hhp_color'),
-                        product.get('hhp_carrier'),
-                        product.get('detailed_review_content'),
-                        product.get('summarized_review_content'),
-                        product.get('top_mentions'),
-                        product.get('retailer_sku_name_similar'),
-                        product.get('main_rank'),
-                        product.get('bsr_rank'),
-                        product.get('trend_rank'),
-                        product.get('promotion_type'),
-                        product.get('calendar_week'),
-                        current_time,
-                        self.batch_id
-                    ))
-                    print(f"[DEBUG] Main product inserted successfully")
-                    saved_count += 1
-
-                except Exception as product_error:
-                    print(f"[ERROR] Failed to save product {product.get('retailer_sku_name', 'N/A')}: {product_error}")
-                    traceback.print_exc()
-                    # 개별 제품 저장 실패 시 롤백하고 0 반환
+                except Exception:
                     self.db_conn.rollback()
-                    cursor.close()
-                    return 0
 
-            # 모든 제품 저장 성공 후 커밋
-            print(f"[DEBUG] Committing transaction...")
-            self.db_conn.commit()
-            print(f"[DEBUG] Transaction committed successfully")
+                    for single_product in batch_products:
+                        try:
+                            cursor.execute(insert_query, product_to_tuple(single_product))
+                            self.db_conn.commit()
+                            saved_count += 1
+                        except Exception as single_error:
+                            print(f"[ERROR] DB save failed: {single_product.get('item')}: {single_error}")
+                            self.db_conn.rollback()
+                            continue
+
             cursor.close()
-
-            print(f"[SUCCESS] Saved {saved_count} products to hhp_retail_com")
-
             return saved_count
 
         except Exception as e:
-            print(f"[ERROR] Failed to save products (outer exception): {e}")
-            traceback.print_exc()
-            self.db_conn.rollback()
+            print(f"[ERROR] Failed to save products: {e}")
             return 0
 
     def run(self):
-        """
-        크롤러 실행
-        Returns: bool: 성공 시 True, 실패 시 False
-        """
+        """실행: initialize() → load_product_list() → 제품별 crawl_detail() → save_to_retail_com() → 리소스 정리"""
         try:
-            # 초기화
             if not self.initialize():
                 print("[ERROR] Initialization failed")
                 return False
 
-            # product_list 조회
             product_list = self.load_product_list()
             if not product_list:
-                print("[WARNING] No products found in bby_hhp_product_list")
+                print("[ERROR] No products found")
                 return False
 
-            print("\n" + "="*60)
-            print(f"[INFO] Starting BestBuy Detail page crawling...")
-            print(f"[INFO] Total products to crawl: {len(product_list)}")
-            print("="*60 + "\n")
-
-            # 모든 제품 상세 페이지 크롤링
             total_saved = 0
+            crawled_products = []
+            SAVE_BATCH_SIZE = 5
 
             for i, product in enumerate(product_list, 1):
                 sku_name = product.get('retailer_sku_name', 'N/A')
-                print(f"[{i}/{len(product_list)}] Processing: {sku_name[:50]}...")
+                print(f"[{i}/{len(product_list)}] {sku_name[:50]}...")
 
                 combined_data = self.crawl_detail(product)
+                crawled_products.append(combined_data)
 
-                # 1개 제품마다 즉시 DB에 저장 (유사 제품도 함께 저장됨)
-                saved_count = self.save_to_retail_com([combined_data])
-                total_saved += saved_count
+                if len(crawled_products) >= SAVE_BATCH_SIZE:
+                    saved_count = self.save_to_retail_com(crawled_products)
+                    total_saved += saved_count
+                    crawled_products = []
 
-                # 페이지 간 대기
                 time.sleep(5)
 
-            # 결과 출력
-            print("\n" + "="*60)
-            print(f"[COMPLETE] BestBuy Detail Crawler Finished")
-            print(f"[RESULT] Total products processed: {len(product_list)}")
-            print(f"[RESULT] Total products saved: {total_saved}")
-            print(f"[RESULT] Batch ID: {self.batch_id}")
-            print("="*60 + "\n")
+            if crawled_products:
+                saved_count = self.save_to_retail_com(crawled_products)
+                total_saved += saved_count
 
+            print(f"[DONE] Processed: {len(product_list)}, Saved: {total_saved}, batch_id: {self.batch_id}")
             return True
 
         except Exception as e:
-            print(f"[ERROR] Crawler execution failed: {e}")
+            print(f"[ERROR] Crawler failed: {e}")
             traceback.print_exc()
             return False
 
         finally:
-            # 리소스 정리
             if self.driver:
                 self.driver.quit()
-                print("[INFO] WebDriver closed")
             if self.db_conn:
                 self.db_conn.close()
-                print("[INFO] Database connection closed")
 
 
 def main():
-    """
-    개별 실행 시 진입점 (기본 배치 ID 사용)
-    """
+    """개별 실행 진입점 (기본 배치 ID 사용)"""
     crawler = BestBuyDetailCrawler()
-    success = crawler.run()
-
-    if success:
-        print("\n[SUCCESS] BestBuy Detail Crawler completed successfully")
-    else:
-        print("\n[FAILED] BestBuy Detail Crawler failed")
+    crawler.run()
 
 
 if __name__ == '__main__':
