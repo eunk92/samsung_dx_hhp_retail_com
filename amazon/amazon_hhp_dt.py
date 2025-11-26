@@ -755,12 +755,6 @@ class AmazonDetailCrawler(BaseCrawler):
             except Exception as e:
                 print(f"[WARNING] Failed to extract count_of_star_ratings: {e}")
 
-            try:
-                # summarized_review_content: AI 요약 리뷰 (Detail 페이지에서 추출 - 리뷰 페이지 이동 전)
-                summarized_review_content = self.extract_with_fallback(tree, self.xpaths.get('summarized_review_content', {}).get('xpath'))
-            except Exception as e:
-                print(f"[WARNING] Failed to extract summarized_review_content: {e}")
-
             print(f"[INFO] Detail page extraction completed")
 
             # === 리뷰 섹션으로 이동 (리뷰 링크 클릭) ===
@@ -789,6 +783,12 @@ class AmazonDetailCrawler(BaseCrawler):
                 print(f"[INFO] Navigated to review section")
             except Exception as e:
                 print(f"[WARNING] Could not navigate to review section: {e}")
+
+            try:
+                # summarized_review_content: AI 요약 리뷰 (Detail 페이지에서 추출 - 리뷰 페이지 이동 전)
+                summarized_review_content = self.extract_with_fallback(tree, self.xpaths.get('summarized_review_content', {}).get('xpath'))
+            except Exception as e:
+                print(f"[WARNING] Failed to extract summarized_review_content: {e}")
 
             # === STEP 2: 리뷰 페이지로 이동하여 detailed_review_content 추출 ===
             # detail_page_tree: 로그인 실패 시 상세 페이지에서 리뷰 추출하는 폴백용
