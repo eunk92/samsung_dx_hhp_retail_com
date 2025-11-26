@@ -294,11 +294,11 @@ class BestBuyBSRCrawler(BaseCrawler):
                                         self.db_conn.rollback()
 
             cursor.close()
-            return insert_count + update_count
+            return {'insert': insert_count, 'update': update_count}
 
         except Exception as e:
             print(f"[ERROR] Failed to save products: {e}")
-            return 0
+            return {'insert': 0, 'update': 0}
 
     def run(self):
         """실행: initialize() → 페이지별 crawl_page() → save_products() → 리소스 정리"""
@@ -307,12 +307,13 @@ class BestBuyBSRCrawler(BaseCrawler):
                 print("[ERROR] Initialization failed")
                 return False
 
-            total_products = 0
+            total_insert = 0
+            total_update = 0
             target_products = self.test_count if self.test_mode else self.max_products
             self.current_rank = 0
             page_num = 1
 
-            while total_products < target_products:
+            while (total_insert + total_update) < target_products:
                 products = self.crawl_page(page_num)
 
                 if not products:
@@ -320,18 +321,19 @@ class BestBuyBSRCrawler(BaseCrawler):
                         break
                     print(f"[ERROR] No products found at page {page_num}")
                 else:
-                    remaining = target_products - total_products
+                    remaining = target_products - (total_insert + total_update)
                     products_to_save = products[:remaining]
-                    saved_count = self.save_products(products_to_save)
-                    total_products += saved_count
+                    result = self.save_products(products_to_save)
+                    total_insert += result['insert']
+                    total_update += result['update']
 
-                    if total_products >= target_products:
+                    if (total_insert + total_update) >= target_products:
                         break
 
                 time.sleep(30)
                 page_num += 1
 
-            print(f"[DONE] Page: {page_num}, Saved: {total_products}, batch_id: {self.batch_id}")
+            print(f"[DONE] Update: {total_update}, Insert: {total_insert}, Page: {page_num}, batch_id: {self.batch_id}")
             return True
 
         except Exception as e:
