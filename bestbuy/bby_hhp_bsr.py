@@ -10,6 +10,7 @@ BestBuy BSR 페이지 크롤러
 import sys
 import os
 import time
+import traceback
 from datetime import datetime
 from lxml import html
 
@@ -43,8 +44,7 @@ class BestBuyBSRCrawler(BaseCrawler):
         self.current_rank = 0  # 추출 순서대로 rank 부여
 
         # 테스트 설정
-        self.test_page = 1
-        self.test_count = 1
+        self.test_count = 3  # 테스트 모드 목표: 3개 제품 수집
 
         # 운영 모드 설정
         self.max_products = 100  # 운영 모드 목표: 100개 제품 수집
@@ -57,7 +57,7 @@ class BestBuyBSRCrawler(BaseCrawler):
         """
         print("\n" + "="*60)
         print(f"[INFO] BestBuy BSR Crawler Initialization")
-        print(f"[INFO] Test Mode: {'ON (1 product from page 1)' if self.test_mode else 'OFF (2 pages)'}")
+        print(f"[INFO] Test Mode: {'ON (' + str(self.test_count) + ' products)' if self.test_mode else 'OFF (' + str(self.max_products) + ' products)'}")
         print("="*60 + "\n")
 
         # 1. DB 연결
@@ -91,6 +91,50 @@ class BestBuyBSRCrawler(BaseCrawler):
 
         return True
 
+    def scroll_to_bottom(self):
+        """
+        페이지네이션 버튼이 viewport에 나타날 때까지 스크롤
+        - 300px씩 점진적으로 스크롤
+        - 페이지네이션이 화면에 보이면 스크롤 종료
+        """
+        try:
+            scroll_step = 300  # 300px씩 스크롤
+            current_position = 0
+            max_scroll_attempts = 50  # 무한 루프 방지
+
+            for _ in range(max_scroll_attempts):
+                # 페이지네이션이 현재 viewport에 보이는지 확인 (JavaScript)
+                is_pagination_visible = self.driver.execute_script("""
+                    var elem = document.querySelector("div.pagination-container");
+                    if (!elem) return false;
+                    var rect = elem.getBoundingClientRect();
+                    return (rect.top >= 0 && rect.top <= window.innerHeight);
+                """)
+
+                if is_pagination_visible:
+                    print(f"[INFO] Pagination visible in viewport, stopping scroll")
+                    break
+
+                # 300px 아래로 스크롤
+                current_position += scroll_step
+                self.driver.execute_script(f"window.scrollTo(0, {current_position});")
+
+                # 콘텐츠 로드 대기
+                time.sleep(3)
+
+                # 페이지 끝에 도달했는지 확인
+                total_height = self.driver.execute_script("return document.body.scrollHeight")
+                if current_position >= total_height:
+                    print(f"[INFO] Reached page bottom")
+                    break
+
+            # 최종 로드 대기
+            time.sleep(2)
+            print(f"[INFO] Scroll completed, page fully loaded")
+
+        except Exception as e:
+            print(f"[WARNING] Scroll failed: {e}")
+
     def crawl_page(self, page_number):
         """
         특정 페이지 크롤링
@@ -104,32 +148,48 @@ class BestBuyBSRCrawler(BaseCrawler):
             url = self.url_template.replace('{page}', str(page_number))
             print(f"\n[INFO] Crawling page {page_number}: {url}")
 
-            # 페이지 로드
-            self.driver.get(url)
-            time.sleep(30)
-
-            # HTML 파싱
-            page_html = self.driver.page_source
-            tree = html.fromstring(page_html)
-
             # 제품 리스트 XPath
             base_container_xpath = self.xpaths.get('base_container', {}).get('xpath')
             if not base_container_xpath:
                 print("[ERROR] base_container XPath not found")
                 return []
 
-            # 제품 아이템 추출
-            base_containers = tree.xpath(base_container_xpath)
-            print(f"[INFO] Found {len(base_containers)} products on page {page_number}")
+            # 1. 페이지 로드 -> 스크롤 -> 30초 대기
+            self.driver.get(url)
+            time.sleep(10)  # 초기 로드 대기
 
-            # 테스트 모드일 때는 설정된 범위만, 운영 모드일 때는 전체 처리
-            if self.test_mode:
-                containers_to_process = base_containers[:self.test_count]
-            else:
-                containers_to_process = base_containers
+            print(f"[INFO] Scrolling to load all products...")
+            self.scroll_to_bottom()
+            time.sleep(30)  # 스크롤 후 30초 대기
+
+            # 제품 추출 (최대 3번 시도, 리로드 없이 HTML 재파싱)
+            base_containers = []
+            max_retries = 3
+            expected_products = 24  # 1페이지 기준 24개 제품
+
+            for attempt in range(1, max_retries + 1):
+                # HTML 파싱
+                page_html = self.driver.page_source
+                tree = html.fromstring(page_html)
+
+                # 제품 아이템 추출
+                base_containers = tree.xpath(base_container_xpath)
+                print(f"[INFO] Found {len(base_containers)} products on page {page_number} (attempt {attempt}/{max_retries})")
+
+                # 24개 이상 로드되었으면 성공
+                if len(base_containers) >= expected_products:
+                    print(f"[INFO] All products loaded successfully")
+                    break
+
+                # 24개 미만이면 대기 후 재파싱
+                if attempt < max_retries:
+                    print(f"[WARNING] Only {len(base_containers)} products found, waiting 10s and retrying...")
+                    time.sleep(10)  # 10초 대기 후 재파싱
+                else:
+                    print(f"[WARNING] Could not load {expected_products} products after {max_retries} attempts, proceeding with {len(base_containers)} products")
 
             products = []
-            for item in containers_to_process:
+            for item in base_containers:
                 try:
                     # product_url 추출 및 절대 경로 변환
                     product_url_raw = self.extract_with_fallback(item, self.xpaths.get('product_url', {}).get('xpath'))
@@ -152,6 +212,7 @@ class BestBuyBSRCrawler(BaseCrawler):
                         'sku_status': self.extract_with_fallback(item, self.xpaths.get('sku_status', {}).get('xpath')),
                         'promotion_type': self.extract_with_fallback(item, self.xpaths.get('promotion_type', {}).get('xpath')),
                         'bsr_rank': self.current_rank,
+                        'page_number': page_number,
                         'product_url': product_url,
                         'calendar_week': self.calendar_week,
                         'crawl_strdatetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -208,7 +269,7 @@ class BestBuyBSRCrawler(BaseCrawler):
             # 2단계: UPDATE 처리 (개별 실행)
             update_query = """
                 UPDATE bby_hhp_product_list
-                SET bsr_rank = %s
+                SET bsr_rank = %s, bsr_page_number = %s
                 WHERE account_name = %s
                   AND batch_id = %s
                   AND product_url = %s
@@ -218,6 +279,7 @@ class BestBuyBSRCrawler(BaseCrawler):
                 try:
                     cursor.execute(update_query, (
                         product['bsr_rank'],
+                        product['page_number'],
                         self.account_name,
                         product['batch_id'],
                         product['product_url']
@@ -236,10 +298,10 @@ class BestBuyBSRCrawler(BaseCrawler):
                         account_name, page_type, retailer_sku_name,
                         final_sku_price, savings, comparable_pricing,
                         offer, pick_up_availability, shipping_availability, delivery_availability,
-                        sku_status, promotion_type, bsr_rank, product_url,
+                        sku_status, promotion_type, bsr_rank, bsr_page_number, product_url,
                         calendar_week, crawl_strdatetime, batch_id
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                 """
 
@@ -267,6 +329,7 @@ class BestBuyBSRCrawler(BaseCrawler):
                                 product['sku_status'],
                                 product['promotion_type'],
                                 product['bsr_rank'],
+                                product['page_number'],
                                 product['product_url'],
                                 product['calendar_week'],
                                 product['crawl_strdatetime'],
@@ -320,42 +383,38 @@ class BestBuyBSRCrawler(BaseCrawler):
 
             total_products = 0
 
-            if self.test_mode:
-                # 테스트 모드: 설정된 페이지만 크롤링 및 DB 저장
-                products = self.crawl_page(self.test_page)
-                saved_count = self.save_products(products)
-                total_products += saved_count
-            else:
-                # 운영 모드: 100개 제품이 수집될 때까지 계속 크롤링
-                page_num = 1
+            # 목표 제품 수 설정 (테스트/운영 모드에 따라)
+            target_products = self.test_count if self.test_mode else self.max_products
+            self.current_rank = 0
+            page_num = 1
 
-                while total_products < self.max_products:
-                    products = self.crawl_page(page_num)
+            while total_products < target_products:
+                products = self.crawl_page(page_num)
 
-                    if not products:
-                        print(f"[WARNING] No products found at page {page_num}")
-                        # 빈 페이지면 종료
-                        if page_num > 1:
-                            print(f"[INFO] No more products available, stopping...")
-                            break
-                    else:
-                        # 100개 초과 방지: 남은 개수만큼만 저장
-                        remaining = self.max_products - total_products
-                        products_to_save = products[:remaining]
+                if not products:
+                    print(f"[WARNING] No products found at page {page_num}")
+                    # 연속 2페이지 빈 페이지면 종료
+                    if page_num > 1:
+                        print(f"[INFO] No more products available, stopping...")
+                        break
+                else:
+                    # 목표 초과 방지: 남은 개수만큼만 저장
+                    remaining = target_products - total_products
+                    products_to_save = products[:remaining]
 
-                        saved_count = self.save_products(products_to_save)
-                        total_products += saved_count
+                    saved_count = self.save_products(products_to_save)
+                    total_products += saved_count
 
-                        print(f"[INFO] Progress: {total_products}/{self.max_products} products collected")
+                    print(f"[INFO] Progress: {total_products}/{target_products} products collected")
 
-                        # 100개 도달 확인
-                        if total_products >= self.max_products:
-                            print(f"[INFO] Reached target product count ({self.max_products}), stopping...")
-                            break
+                    # 목표 도달 확인
+                    if total_products >= target_products:
+                        print(f"[INFO] Reached target product count ({target_products}), stopping...")
+                        break
 
-                    # 페이지 간 대기
-                    time.sleep(30)
-                    page_num += 1
+                # 페이지 간 대기
+                time.sleep(30)
+                page_num += 1
 
             # 결과 출력
             print("\n" + "="*60)

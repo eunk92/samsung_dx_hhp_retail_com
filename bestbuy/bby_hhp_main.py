@@ -261,7 +261,7 @@ class BestBuyMainCrawler(BaseCrawler):
                     account_name, page_type, retailer_sku_name,
                     final_sku_price, savings, comparable_pricing,
                     offer, pick_up_availability, shipping_availability, delivery_availability,
-                    sku_status, promotion_type, main_rank, page_number, product_url,
+                    sku_status, promotion_type, main_rank, main_page_number, product_url,
                     calendar_week, crawl_strdatetime, batch_id
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
