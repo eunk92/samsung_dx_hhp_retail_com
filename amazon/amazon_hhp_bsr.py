@@ -23,6 +23,7 @@ Amazon BSR 페이지 크롤러
 import sys
 import os
 import time
+import traceback
 from datetime import datetime
 from lxml import html
 
@@ -235,6 +236,7 @@ class AmazonBSRCrawler(BaseCrawler):
                                         insert_count += 1
                                     except Exception as single_error:
                                         print(f"[ERROR] DB save failed: {single_product.get('retailer_sku_name', 'N/A')[:30]}: {single_error}")
+                                        traceback.print_exc()
                                         self.db_conn.rollback()
 
             cursor.close()
@@ -242,6 +244,7 @@ class AmazonBSRCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to save products: {e}")
+            traceback.print_exc()
             return {'insert': 0, 'update': 0}
 
     def run(self):

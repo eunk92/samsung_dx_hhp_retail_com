@@ -185,8 +185,6 @@ class AmazonDetailCrawler(BaseCrawler):
             if not any(keyword in page_html for keyword in captcha_keywords):
                 return True
 
-            print("[WARNING] CAPTCHA detected!")
-
             captcha_selectors = [
                 (By.XPATH, "//button[contains(text(), 'Continue shopping')]"),
                 (By.XPATH, "//button[contains(@aria-label, 'CAPTCHA')]"),
@@ -214,7 +212,6 @@ class AmazonDetailCrawler(BaseCrawler):
                 return True
 
             if captcha_type == "input":
-                print("[INFO] Text CAPTCHA - waiting 60s for manual input...")
                 time.sleep(60)
                 return True
 
@@ -230,7 +227,6 @@ class AmazonDetailCrawler(BaseCrawler):
                 if not any(keyword in new_page_html for keyword in captcha_keywords):
                     return True
                 else:
-                    print("[INFO] CAPTCHA still present - waiting 60s...")
                     time.sleep(60)
                     return True
 
@@ -599,6 +595,7 @@ class AmazonDetailCrawler(BaseCrawler):
                             saved_count += 1
                         except Exception as single_error:
                             print(f"[ERROR] DB save failed: {single_product.get('item')}: {single_error}")
+                            traceback.print_exc()
                             self.db_conn.rollback()
 
             cursor.close()
@@ -606,6 +603,7 @@ class AmazonDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to save products: {e}")
+            traceback.print_exc()
             return 0
 
     def run(self):
@@ -626,7 +624,6 @@ class AmazonDetailCrawler(BaseCrawler):
 
             for i, product in enumerate(product_list, 1):
                 sku_name = product.get('retailer_sku_name', 'N/A')
-                print(f"[{i}/{len(product_list)}] {sku_name[:50]}...")
 
                 combined_data = self.crawl_detail(product)
                 crawled_products.append(combined_data)

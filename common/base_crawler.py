@@ -22,25 +22,46 @@ from config import DB_CONFIG
 
 class TeeLogger:
     """
-    stdout을 콘솔과 파일 양쪽에 출력하는 클래스
-    통합 크롤러에서 모든 print() 출력을 로그 파일에 저장
+    stdout/stderr를 콘솔과 파일 양쪽에 출력하는 클래스
+    통합 크롤러에서 모든 print() 출력과 traceback을 로그 파일에 저장
     """
 
     def __init__(self, log_file_path):
-        self.terminal = sys.stdout
+        self.terminal_stdout = sys.stdout
+        self.terminal_stderr = sys.stderr
         self.log_file = open(log_file_path, 'w', encoding='utf-8')
 
     def write(self, message):
-        self.terminal.write(message)
+        self.terminal_stdout.write(message)
         self.log_file.write(message)
-        self.log_file.flush()  # 즉시 파일에 기록
+        self.log_file.flush()
 
     def flush(self):
-        self.terminal.flush()
+        self.terminal_stdout.flush()
         self.log_file.flush()
 
     def close(self):
         self.log_file.close()
+
+
+class TeeLoggerStderr:
+    """
+    stderr를 콘솔과 파일 양쪽에 출력하는 클래스
+    traceback.print_exc() 등 stderr 출력을 로그 파일에 저장
+    """
+
+    def __init__(self, tee_logger):
+        self.tee_logger = tee_logger
+        self.terminal_stderr = sys.stderr
+
+    def write(self, message):
+        self.terminal_stderr.write(message)
+        self.tee_logger.log_file.write(message)
+        self.tee_logger.log_file.flush()
+
+    def flush(self):
+        self.terminal_stderr.flush()
+        self.tee_logger.log_file.flush()
 
 
 class BaseCrawler:
@@ -55,7 +76,9 @@ class BaseCrawler:
         self.db_conn = None
         self.xpaths = {}
         self.tee_logger = None
+        self.tee_logger_stderr = None
         self.original_stdout = None
+        self.original_stderr = None
 
     def start_logging(self, account_name, batch_id):
         """
@@ -73,19 +96,22 @@ class BaseCrawler:
             str: 로그 파일 경로
         """
         try:
-            # logs 폴더 경로 (프로젝트 루트/logs/{쇼핑몰명})
+            # logs 폴더 경로 (프로젝트 루트/logs/)
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            shop_folder = account_name.lower()
-            logs_dir = os.path.join(project_root, 'logs', shop_folder)
+            logs_dir = os.path.join(project_root, 'logs')
             os.makedirs(logs_dir, exist_ok=True)
 
             # 로그 파일명: {쇼핑몰명}_{batch_id}.txt
+            shop_folder = account_name.lower()
             log_file_path = os.path.join(logs_dir, f"{shop_folder}_{batch_id}.txt")
 
-            # TeeLogger 시작
+            # TeeLogger 시작 (stdout + stderr)
             self.original_stdout = sys.stdout
+            self.original_stderr = sys.stderr
             self.tee_logger = TeeLogger(log_file_path)
+            self.tee_logger_stderr = TeeLoggerStderr(self.tee_logger)
             sys.stdout = self.tee_logger
+            sys.stderr = self.tee_logger_stderr
 
             return log_file_path
 
@@ -99,13 +125,15 @@ class BaseCrawler:
 
         쓰임새:
         - 통합 크롤러 종료 시 호출
-        - stdout을 원래대로 복원하고 로그 파일 닫기
+        - stdout/stderr를 원래대로 복원하고 로그 파일 닫기
         """
         try:
             if self.tee_logger and self.original_stdout:
                 sys.stdout = self.original_stdout
+                sys.stderr = self.original_stderr
                 self.tee_logger.close()
                 self.tee_logger = None
+                self.tee_logger_stderr = None
                 self.original_stdout = None
         except Exception as e:
             print(f"[WARNING] Failed to stop logging: {e}")
@@ -364,7 +392,7 @@ class BaseCrawler:
         week_number = now.isocalendar()[1]  # ISO week number
         return f"w{week_number}"
 
-    def cleanup_old_logs(self, log_dir='logs', days=30):
+    def cleanup_old_logs(self, days=30):
         """
         오래된 로그 파일 자동 삭제
 
@@ -374,18 +402,24 @@ class BaseCrawler:
         - 기본 30일 이상 된 로그 파일 삭제
 
         Args:
-            log_dir (str): 로그 디렉토리 경로 (기본: 'logs')
             days (int): 보관 일수 (기본: 30일)
 
         Returns:
             None
         """
         try:
+            # logs 폴더 경로 (프로젝트 루트/logs/)
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            logs_dir = os.path.join(project_root, 'logs')
+
+            if not os.path.exists(logs_dir):
+                return
+
             # 삭제 기준 시간 계산
             cutoff_time = datetime.now() - timedelta(days=days)
 
-            # *_error_*.log 패턴 파일 검색
-            log_pattern = os.path.join(log_dir, '*_error_*.log')
+            # *.txt 패턴 파일 검색 (logs/ 하단의 모든 txt 파일)
+            log_pattern = os.path.join(logs_dir, '*.txt')
             log_files = glob.glob(log_pattern)
 
             deleted_count = 0

@@ -467,6 +467,7 @@ class BestBuyDetailCrawler(BaseCrawler):
                             saved_count += 1
                         except Exception as single_error:
                             print(f"[ERROR] DB save failed: {single_product.get('item')}: {single_error}")
+                            traceback.print_exc()
                             self.db_conn.rollback()
                             continue
 
@@ -475,6 +476,7 @@ class BestBuyDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to save products: {e}")
+            traceback.print_exc()
             return 0
 
     def run(self):
