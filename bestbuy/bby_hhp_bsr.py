@@ -333,7 +333,7 @@ class BestBuyBSRCrawler(BaseCrawler):
                 time.sleep(30)
                 page_num += 1
 
-            print(f"[DONE] Update: {total_update}, Insert: {total_insert}, Page: {page_num}, batch_id: {self.batch_id}")
+            print(f"[DONE] Page: {page_num}, Update: {total_update}, Insert: {total_insert}, batch_id: {self.batch_id}")
             return True
 
         except Exception as e:
