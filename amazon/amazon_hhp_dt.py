@@ -13,6 +13,7 @@ import os
 import time
 import traceback
 import random
+import subprocess
 from datetime import datetime
 from lxml import html
 
@@ -34,7 +35,7 @@ class AmazonDetailCrawler(BaseCrawler):
     Amazon Detail 페이지 크롤러
     """
 
-    def __init__(self, test_mode=True, batch_id=None):
+    def __init__(self, test_mode=True, batch_id=None, login_success=None):
         """
         초기화
 
@@ -45,6 +46,10 @@ class AmazonDetailCrawler(BaseCrawler):
             batch_id (str): 배치 ID (기본값: None)
                            - None: DB에서 최신 batch_id 자동 조회
                            - 문자열: 통합 크롤러에서 전달된 batch_id 사용
+            login_success (bool): 로그인 성공 여부 (기본값: None)
+                           - None: 개별 실행 시 (쿠키 로드 시도)
+                           - True: 통합 크롤러에서 로그인 성공 (쿠키 로드)
+                           - False: 통합 크롤러에서 로그인 실패 (쿠키 로드 안함, 리뷰 스킵)
         """
         super().__init__()
 
@@ -53,6 +58,7 @@ class AmazonDetailCrawler(BaseCrawler):
         self.account_name = 'Amazon'
         self.page_type = 'detail'
         self.cookies_loaded = False  # 쿠키 로드 여부 플래그
+        self.login_success = login_success  # 로그인 성공 여부 (통합 크롤러에서 전달)
 
         # 테스트 설정
         self.test_count = 1  # 테스트 모드에서 크롤링할 제품 수
@@ -89,13 +95,77 @@ class AmazonDetailCrawler(BaseCrawler):
         # 4. WebDriver 설정
         self.setup_driver()
 
-        # 5. 쿠키 로드 (일관된 세션 유지)
-        self.cookies_loaded = self.load_cookies(self.account_name)
+        # 5. 쿠키 로드 (로그인 성공 여부에 따라 분기)
+        if self.login_success is False:
+            # 통합 크롤러에서 로그인 실패한 경우 -> 쿠키 로드 안함
+            print("[INFO] Login failed in integrated crawler - skipping cookie load")
+            print("[INFO] Reviews will be skipped if login is required")
+            self.cookies_loaded = False
+        else:
+            # login_success가 None(개별 실행) 또는 True(로그인 성공)인 경우 -> 쿠키 로드 시도
+            self.cookies_loaded = self.load_cookies(self.account_name)
 
         # 6. 오래된 로그 정리
         self.cleanup_old_logs()
 
         return True
+
+    def run_login_and_reload_cookies(self):
+        """
+        로그인 요구 감지 시 로그인 스크립트 실행 후 쿠키 갱신
+
+        Returns:
+            bool: 로그인 성공 시 True, 실패 시 False
+        """
+        try:
+            # amazon_login.py 경로
+            login_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'amazon_login.py')
+
+            if not os.path.exists(login_script):
+                print(f"[ERROR] Login script not found: {login_script}")
+                return False
+
+            print(f"\n[INFO] Login required - running login script...")
+            print(f"[INFO] Script path: {login_script}")
+
+            # subprocess로 로그인 스크립트 실행
+            result = subprocess.run(
+                ['python', login_script],
+                capture_output=True,
+                text=True,
+                timeout=180  # 3분 타임아웃 (OTP 입력 시간 포함)
+            )
+
+            # 결과 출력
+            if result.stdout:
+                print(result.stdout)
+            if result.stderr:
+                print(result.stderr)
+
+            # 로그인 성공 여부 판단
+            if result.returncode == 0 or 'LOGIN SUCCESSFUL' in result.stdout or 'Successfully logged in' in result.stdout:
+                print("[OK] Login successful - reloading cookies...")
+
+                # 쿠키 다시 로드
+                self.cookies_loaded = self.load_cookies(self.account_name)
+
+                if self.cookies_loaded:
+                    print("[OK] Cookies reloaded successfully")
+                    self.login_success = True
+                    return True
+                else:
+                    print("[WARNING] Failed to reload cookies")
+                    return False
+            else:
+                print("[WARNING] Login failed")
+                return False
+
+        except subprocess.TimeoutExpired:
+            print("[ERROR] Login script timed out (180 seconds)")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Login script execution failed: {e}")
+            return False
 
     def load_product_list(self):
         """
@@ -285,13 +355,76 @@ class AmazonDetailCrawler(BaseCrawler):
             traceback.print_exc()
             return False
 
-    def extract_reviews(self, item, max_reviews=20):
+    def extract_reviews_from_detail_page(self, tree, max_reviews=10):
+        """
+        상세 페이지 HTML에서 리뷰 추출 (폴백용)
+        - 리뷰 페이지 접근이 불가능할 때 상세 페이지에 표시된 리뷰만 수집
+        - 보통 3~10개 정도의 리뷰가 표시됨
+
+        Args:
+            tree: lxml HTML 트리 (상세 페이지)
+            max_reviews (int): 추출할 최대 리뷰 개수 (기본값: 10)
+
+        Returns:
+            str: 구분자(|||)로 연결된 리뷰 내용 문자열 또는 None
+        """
+        try:
+            # 상세 페이지의 리뷰 섹션에서 리뷰 추출
+            # Amazon 상세 페이지 리뷰 XPath들
+            detail_page_review_xpaths = [
+                "//div[@id='cm-cr-dp-review-list']//span[@data-hook='review-body']//span/text()",
+                "//div[@data-hook='review']//span[@data-hook='review-body']//span/text()",
+                "//div[contains(@class, 'review')]//span[@data-hook='review-body']/span/text()",
+                "//div[@id='reviewsMedley']//span[@data-hook='review-body']//span/text()",
+            ]
+
+            review_texts = []
+            for xpath in detail_page_review_xpaths:
+                try:
+                    texts = tree.xpath(xpath)
+                    if texts:
+                        review_texts = texts
+                        break
+                except:
+                    continue
+
+            if not review_texts:
+                print(f"[WARNING] No reviews found on detail page (fallback)")
+                return data_extractor.get_no_reviews_text(self.account_name)
+
+            # 최대 개수만큼만 선택
+            review_texts = review_texts[:max_reviews]
+
+            # 각 리뷰 처리: 줄바꿈 공백으로 치환, 앞뒤 공백 제거
+            cleaned_reviews = []
+            for review in review_texts:
+                if review.strip():
+                    cleaned = ' '.join(review.split())
+                    if len(cleaned) > 10:  # 너무 짧은 것 제외
+                        cleaned_reviews.append(cleaned)
+
+            if not cleaned_reviews:
+                return data_extractor.get_no_reviews_text(self.account_name)
+
+            # 구분자로 연결
+            result = ' ||| '.join(cleaned_reviews)
+
+            print(f"[INFO] Extracted {len(cleaned_reviews)} reviews from detail page (fallback)")
+            print(f"[INFO] Total length: {len(result)} chars")
+            return result
+
+        except Exception as e:
+            print(f"[ERROR] Failed to extract reviews from detail page: {e}")
+            return data_extractor.get_no_reviews_text(self.account_name)
+
+    def extract_reviews(self, item, max_reviews=20, detail_page_tree=None):
         """
         제품 리뷰 페이지에서 리뷰 내용 추출
 
         Args:
             item (str): Amazon ASIN 코드 (예: B0ABCD1234)
             max_reviews (int): 추출할 최대 리뷰 개수 (기본값: 20)
+            detail_page_tree: 상세 페이지 HTML 트리 (폴백용, 로그인 실패 시 사용)
 
         Returns:
             str: 구분자(|||)로 연결된 리뷰 내용 문자열 또는 None
@@ -304,6 +437,15 @@ class AmazonDetailCrawler(BaseCrawler):
                 print(f"[WARNING] ASIN is required for review extraction")
                 return None
 
+            # ===== 로그인 실패 상태면 상세 페이지 리뷰로 폴백 =====
+            if self.login_success is False:
+                print(f"[INFO] Login was not successful - trying fallback to detail page reviews")
+                if detail_page_tree is not None:
+                    return self.extract_reviews_from_detail_page(detail_page_tree)
+                else:
+                    print(f"[WARNING] No detail page tree available for fallback")
+                    return data_extractor.get_no_reviews_text(self.account_name)
+
             # 리뷰 페이지 URL 생성
             review_url = f"https://www.amazon.com/product-reviews/{item}/ref=cm_cr_dp_d_show_all_btm?ie=UTF8&reviewerType=all_reviews"
 
@@ -315,22 +457,62 @@ class AmazonDetailCrawler(BaseCrawler):
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
 
+            # ===== 페이지 오류 감지 =====
+            # "Sorry, we couldn't find that page" 등 페이지 없음 오류
+            page_html_lower = page_html.lower()
+            if "couldn't find that page" in page_html_lower or "page not found" in page_html_lower or "sorry, we couldn" in page_html_lower:
+                print(f"[WARNING] Review page not found for ASIN: {item} - skipping to next product")
+                return data_extractor.get_no_reviews_text(self.account_name)
+
             # ===== 로그인 요구 페이지 감지 =====
             # 로그인 페이지로 리다이렉트되었는지 확인
             current_url = self.driver.current_url
             if 'signin' in current_url or 'ap/signin' in current_url:
-                print(f"[ERROR] Login required for review page. Current URL: {current_url}")
-                print(f"[INFO] Please run: python amazon_login.py to refresh cookies")
-                return data_extractor.get_no_reviews_text(self.account_name)
+                print(f"[WARNING] Login required for review page")
+                print(f"[INFO] Current URL: {current_url}")
+
+                # 로그인 스크립트 실행 후 재시도
+                if self.run_login_and_reload_cookies():
+                    print(f"[INFO] Retrying review page after login...")
+                    self.driver.get(review_url)
+                    time.sleep(10)
+                    page_html = self.driver.page_source
+                    tree = html.fromstring(page_html)
+
+                    # 여전히 로그인 요구 상태인지 확인
+                    current_url = self.driver.current_url
+                    if 'signin' in current_url or 'ap/signin' in current_url:
+                        print(f"[WARNING] Still requires login after retry - using detail page fallback")
+                        if detail_page_tree is not None:
+                            return self.extract_reviews_from_detail_page(detail_page_tree)
+                        return data_extractor.get_no_reviews_text(self.account_name)
+                    # 정상 진행 (아래 리뷰 추출 로직으로 계속)
+                else:
+                    print(f"[WARNING] Login failed - using detail page fallback")
+                    if detail_page_tree is not None:
+                        return self.extract_reviews_from_detail_page(detail_page_tree)
+                    return data_extractor.get_no_reviews_text(self.account_name)
 
             # Bot 감지 페이지 확인 (CAPTCHA 또는 "Sorry, we just need to make sure you're not a robot")
             if 'robot' in page_html.lower() or 'captcha' in page_html.lower():
-                print(f"[ERROR] Bot detection triggered on review page")
-                print(f"[INFO] Amazon detected automated access. Please:")
-                print(f"       1. Run: python amazon_login.py")
-                print(f"       2. Manually solve CAPTCHA if prompted")
-                print(f"       3. Wait before retrying")
-                return data_extractor.get_no_reviews_text(self.account_name)
+                print(f"[WARNING] Bot detection triggered on review page")
+                print(f"[INFO] Attempting to solve CAPTCHA...")
+
+                if self.handle_captcha():
+                    # CAPTCHA 해결 후 리뷰 페이지 다시 로드
+                    print(f"[OK] CAPTCHA handled, retrying review page...")
+                    self.driver.get(review_url)
+                    time.sleep(5)
+                    page_html = self.driver.page_source
+                    tree = html.fromstring(page_html)
+
+                    # 여전히 Bot 감지 상태인지 확인
+                    if 'robot' in page_html.lower() or 'captcha' in page_html.lower():
+                        print(f"[WARNING] CAPTCHA still present - skipping to next product")
+                        return data_extractor.get_no_reviews_text(self.account_name)
+                else:
+                    print(f"[WARNING] CAPTCHA handling failed - skipping to next product")
+                    return data_extractor.get_no_reviews_text(self.account_name)
             # ===== 로그인 감지 끝 =====
 
             # 리뷰 내용 추출 (XPath - DB에서 로드)
@@ -566,14 +748,17 @@ class AmazonDetailCrawler(BaseCrawler):
 
 
             # === 리뷰 섹션으로 이동 (리뷰 링크 클릭) ===
+            # 상세 페이지 HTML 트리 저장 (폴백용 - 로그인 실패 시 상세 페이지 리뷰 추출)
+            detail_page_tree = None
             try:
                 # 페이지 맨 위로 스크롤
                 self.driver.execute_script("window.scrollTo(0, 0);")
                 time.sleep(1)
 
-                # HTML 다시 파싱
+                # HTML 다시 파싱 및 폴백용 저장
                 page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
+                detail_page_tree = tree  # 폴백용 저장
 
                 # 리뷰 링크 클릭
                 review_link = WebDriverWait(self.driver, 5).until(
@@ -621,8 +806,8 @@ class AmazonDetailCrawler(BaseCrawler):
             print(f"[INFO] Detail page extraction completed")
 
             # === STEP 2: 리뷰 페이지로 이동하여 detailed_review_content 추출 ===
-            #detailed_review_content = self.extract_reviews(item, max_reviews=20) if item else None
-            detailed_review_content = None
+            # detail_page_tree: 로그인 실패 시 상세 페이지에서 리뷰 추출하는 폴백용
+            detailed_review_content = self.extract_reviews(item, max_reviews=20, detail_page_tree=detail_page_tree) if item else None
 
             # Detail 페이지에서 추출할 필드 (hhp_retail_com 테이블 구조 기준)
             detail_data = {
@@ -658,9 +843,9 @@ class AmazonDetailCrawler(BaseCrawler):
 
     def save_to_retail_com(self, products):
         """
-        수집된 데이터를 hhp_retail_com 테이블에 저장
-        - product_list에서 가져온 필드 + Detail 페이지에서 추출한 필드 결합
-        - 1개 제품마다 즉시 저장 (리뷰 데이터 메모리 효율)
+        수집된 데이터를 hhp_retail_com 테이블에 배치 저장
+        - 5개씩 배치 INSERT, 실패 시 1개씩 재시도 (2-tier retry)
+        - 리뷰 데이터가 크므로 배치 크기를 5로 제한
 
         Args: products (list): 결합된 제품 데이터 리스트
 
@@ -669,13 +854,12 @@ class AmazonDetailCrawler(BaseCrawler):
         if not products:
             return 0
 
-        print(f"[INFO] Saving {len(products)} products to hhp_retail_com...\n")
+        print(f"[INFO] Saving {len(products)} products to hhp_retail_com (batch mode)...\n")
 
         try:
             cursor = self.db_conn.cursor()
 
             # hhp_retail_com 테이블 구조에 맞춤
-            # product_list에서 가져온 필드 + detail 페이지에서 추출한 필드
             insert_query = """
                 INSERT INTO hhp_retail_com (
                     country, product, item, account_name, page_type,
@@ -699,13 +883,14 @@ class AmazonDetailCrawler(BaseCrawler):
                 )
             """
 
+            # 배치 크기 설정 (리뷰 데이터가 크므로 5개로 제한)
+            BATCH_SIZE = 5
             saved_count = 0
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Detail 크롤러 실행 시점
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-            for product in products:
-                # 디버그: 실제 저장되는 값 출력
-                values = (
-                    # Detail 페이지에서 추출한 필드
+            def product_to_tuple(product):
+                """제품 데이터를 INSERT용 튜플로 변환"""
+                return (
                     product.get('country'),
                     product.get('product'),
                     product.get('item'),
@@ -727,7 +912,6 @@ class AmazonDetailCrawler(BaseCrawler):
                     product.get('hhp_color'),
                     product.get('detailed_review_content'),
                     product.get('summarized_review_content'),
-                    # product_list에서 가져온 필드
                     product.get('final_sku_price'),
                     product.get('original_sku_price'),
                     product.get('shipping_info'),
@@ -737,22 +921,43 @@ class AmazonDetailCrawler(BaseCrawler):
                     product.get('bsr_rank'),
                     product.get('number_of_units_purchased_past_month'),
                     product.get('calendar_week'),
-                    current_time,  # Detail 크롤러 실행 시점의 현재 시간 사용
-                    product.get('batch_id')  # 배치 ID
+                    current_time,
+                    product.get('batch_id')
                 )
 
-                print(f"\n[DEBUG] VALUES being inserted:")
-                for i, val in enumerate(values, 1):
-                    print(f"  [{i}] {val}")
+            # 배치 처리 (5개씩, 실패 시 1개씩 재시도)
+            for batch_start in range(0, len(products), BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, len(products))
+                batch_products = products[batch_start:batch_end]
 
-                cursor.execute(insert_query, values)
-                saved_count += 1
+                try:
+                    # 1차: 5개 배치 INSERT 시도
+                    values_list = [product_to_tuple(p) for p in batch_products]
+                    cursor.executemany(insert_query, values_list)
+                    self.db_conn.commit()
+                    saved_count += len(batch_products)
+                    print(f"[INFO] Inserted batch {batch_start+1}-{batch_end} ({len(batch_products)} products)")
 
-            self.db_conn.commit()
+                except Exception:
+                    # 1차 실패 → 2차: 1개씩 재시도
+                    print(f"[WARNING] Batch {batch_start+1}-{batch_end} failed, retrying one by one...")
+                    self.db_conn.rollback()
+
+                    for single_product in batch_products:
+                        try:
+                            cursor.execute(insert_query, product_to_tuple(single_product))
+                            self.db_conn.commit()
+                            saved_count += 1
+                            print(f"[INFO] Saved individual: {single_product.get('item', 'N/A')}")
+                        except Exception as single_error:
+                            print(f"[ERROR] Failed to save product {single_product.get('item')}: {single_error}")
+                            self.db_conn.rollback()
+                            continue
+
             cursor.close()
 
-            # 저장된 제품 샘플 출력 (처음 3개)
-            print(f"[SUCCESS] Saved {saved_count} products to hhp_retail_com")
+            # 저장 결과 요약
+            print(f"\n[SUCCESS] Saved {saved_count}/{len(products)} products to hhp_retail_com")
             for i, product in enumerate(products[:3], 1):
                 sku_name = product.get('retailer_sku_name', 'N/A')
                 item = product.get('item', 'N/A')
@@ -795,24 +1000,34 @@ class AmazonDetailCrawler(BaseCrawler):
 
             # 모든 제품 상세 페이지 크롤링
             total_saved = 0
+            crawled_products = []  # 배치 저장을 위한 버퍼
+            SAVE_BATCH_SIZE = 5    # 5개씩 모아서 저장
 
             for i, product in enumerate(product_list, 1):
                 sku_name = product.get('retailer_sku_name', 'N/A')
                 print(f"[{i}/{len(product_list)}] Processing: {sku_name[:50]}...")
 
                 combined_data = self.crawl_detail(product)
+                crawled_products.append(combined_data)
 
                 # 첫 제품 크롤링 후 쿠키 저장 (세션 고정, 이후 제품에서 재사용)
                 if not self.cookies_loaded and i == 1:
                     self.save_cookies(self.account_name)
                     self.cookies_loaded = True
 
-                # 1개 제품마다 즉시 DB에 저장 (리뷰 데이터가 �� 수 있어 메모리 효율)
-                saved_count = self.save_to_retail_com([combined_data])
-                total_saved += saved_count
+                # 5개씩 모아서 배치 저장 (2-tier retry: 5개 실패 시 1개씩)
+                if len(crawled_products) >= SAVE_BATCH_SIZE:
+                    saved_count = self.save_to_retail_com(crawled_products)
+                    total_saved += saved_count
+                    crawled_products = []  # 버퍼 초기화
 
                 # 페이지 간 대기
                 time.sleep(5)
+
+            # 남은 제품 저장 (5개 미만)
+            if crawled_products:
+                saved_count = self.save_to_retail_com(crawled_products)
+                total_saved += saved_count
 
             # 결과 출력
             print("\n" + "="*60)

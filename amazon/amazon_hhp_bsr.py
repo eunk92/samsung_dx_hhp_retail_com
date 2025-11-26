@@ -47,8 +47,7 @@ class AmazonBSRCrawler(BaseCrawler):
         self.cookies_loaded = False  # 쿠키 로드 여부 플래그
 
         # 테스트 설정
-        self.test_page = 1          # 테스트할 페이지 번호
-        self.test_count = 1         # 수집할 제품 개수
+        self.test_count = 5         # 테스트 모드에서 수집할 제품 개수
 
         # 운영 모드 설정
         self.max_products = 100     # 운영 모드 최대 제품 수
@@ -67,7 +66,7 @@ class AmazonBSRCrawler(BaseCrawler):
         """
         print("\n" + "="*60)
         print(f"[INFO] Amazon BSR Crawler Initialization")
-        print(f"[INFO] Test Mode: {'ON (1 product from page 1)' if self.test_mode else 'OFF (max 100 products)'}")
+        print(f"[INFO] Test Mode: {'ON (' + str(self.test_count) + ' products)' if self.test_mode else 'OFF (max ' + str(self.max_products) + ' products)'}")
         print("="*60 + "\n")
 
         # 1. DB 연결
@@ -142,11 +141,8 @@ class AmazonBSRCrawler(BaseCrawler):
             base_containers = tree.xpath(base_container_xpath)
             print(f"[INFO] Found {len(base_containers)} products on page {page_number}")
 
-            # 테스트 모드일 때는 설정된 범위만, 운영 모드일 때는 전체 처리
-            if self.test_mode:
-                containers_to_process = base_containers[:self.test_count]
-            else:
-                containers_to_process = base_containers
+            # 전체 제품 처리 (개수 제한은 run()에서 관리)
+            containers_to_process = base_containers
 
             products = []
             for item in containers_to_process:
@@ -268,7 +264,7 @@ class AmazonBSRCrawler(BaseCrawler):
                     self.db_conn.rollback()
                     continue
 
-            # 3단계: INSERT 배치 처리 (20개씩)
+            # 3단계: INSERT 배치 처리 (20개씩, 실패 시 5개 → 1개씩 재시도)
             if products_to_insert:
                 insert_query = """
                     INSERT INTO amazon_hhp_product_list (
@@ -280,40 +276,65 @@ class AmazonBSRCrawler(BaseCrawler):
                     )
                 """
 
-                BATCH_SIZE = 20  # BSR은 데이터 적어서 20개씩
+                BATCH_SIZE = 20
+                RETRY_SIZE = 5  # 2차 재시도 배치 크기
+
+                def product_to_tuple(product):
+                    """제품 데이터를 INSERT용 튜플로 변환"""
+                    return (
+                        product['account_name'],
+                        product['page_type'],
+                        product['retailer_sku_name'],
+                        product['final_sku_price'],
+                        product['bsr_rank'],
+                        product['product_url'],
+                        product['calendar_week'],
+                        product['crawl_strdatetime'],
+                        product['batch_id']
+                    )
 
                 for batch_start in range(0, len(products_to_insert), BATCH_SIZE):
                     batch_end = min(batch_start + BATCH_SIZE, len(products_to_insert))
                     batch_products = products_to_insert[batch_start:batch_end]
 
                     try:
-                        # 배치를 튜플 리스트로 변환
-                        values_list = []
-                        for product in batch_products:
-                            one_product = (
-                                product['account_name'],
-                                product['page_type'],
-                                product['retailer_sku_name'],
-                                product['final_sku_price'],
-                                product['bsr_rank'],
-                                product['product_url'],
-                                product['calendar_week'],
-                                product['crawl_strdatetime'],
-                                product['batch_id']
-                            )
-                            values_list.append(one_product)
-
-                        # 배치 INSERT
+                        # 1차: 20개 배치 INSERT 시도
+                        values_list = [product_to_tuple(p) for p in batch_products]
                         cursor.executemany(insert_query, values_list)
                         self.db_conn.commit()
-
                         insert_count += len(batch_products)
                         print(f"[INFO] Inserted batch {batch_start+1}-{batch_end} ({len(batch_products)} products)")
 
-                    except Exception as batch_error:
-                        print(f"[ERROR] Failed to insert batch {batch_start+1}-{batch_end}: {batch_error}")
+                    except Exception:
+                        # 1차 실패 → 2차: 5개씩 재시도
+                        print(f"[WARNING] Batch {batch_start+1}-{batch_end} failed, retrying with {RETRY_SIZE}...")
                         self.db_conn.rollback()
-                        continue
+
+                        for retry_start in range(0, len(batch_products), RETRY_SIZE):
+                            retry_end = min(retry_start + RETRY_SIZE, len(batch_products))
+                            retry_products = batch_products[retry_start:retry_end]
+
+                            try:
+                                retry_values = [product_to_tuple(p) for p in retry_products]
+                                cursor.executemany(insert_query, retry_values)
+                                self.db_conn.commit()
+                                insert_count += len(retry_products)
+                                print(f"[INFO] Retry saved {retry_start+1}-{retry_end} ({len(retry_products)} products)")
+
+                            except Exception:
+                                # 2차 실패 → 3차: 1개씩 재시도
+                                print(f"[WARNING] Retry batch {retry_start+1}-{retry_end} failed, trying one by one...")
+                                self.db_conn.rollback()
+
+                                for single_product in retry_products:
+                                    try:
+                                        cursor.execute(insert_query, product_to_tuple(single_product))
+                                        self.db_conn.commit()
+                                        insert_count += 1
+                                    except Exception as single_error:
+                                        print(f"[ERROR] Failed to save product: {single_error}")
+                                        self.db_conn.rollback()
+                                        continue  # 실패한 1개만 스킵
 
             cursor.close()
 
@@ -347,43 +368,37 @@ class AmazonBSRCrawler(BaseCrawler):
             print("[INFO] Starting Amazon BSR page crawling...")
             print("="*60 + "\n")
 
+            # 목표 제품 수 설정 (테스트 모드: test_count, 운영 모드: max_products)
+            target_products = self.test_count if self.test_mode else self.max_products
             total_products = 0
+            page_num = 1
 
-            if self.test_mode:
-                # 테스트 모드: 설정된 페이지만 크롤링 및 DB 저장
-                products = self.crawl_page(self.test_page)
-                saved_count = self.save_products(products)
+            while total_products < target_products:
+                print(f"[INFO] Current progress: {total_products}/{target_products} products collected")
+
+                products = self.crawl_page(page_num)
+
+                if not products:
+                    print(f"[WARNING] No products found at page {page_num}, stopping crawler...")
+                    break
+
+                # 목표 초과 방지: 남은 개수만큼만 저장
+                remaining = target_products - total_products
+                products_to_save = products[:remaining]
+
+                saved_count = self.save_products(products_to_save)
                 total_products += saved_count
-            else:
-                # 운영 모드: 100개 제품 수집될 때까지 페이지 크롤링
-                page_num = 1
 
-                while total_products < self.max_products:
-                    print(f"[INFO] Current progress: {total_products}/{self.max_products} products collected")
+                # 목표 달성 확인
+                if total_products >= target_products:
+                    print(f"[INFO] Target reached: {total_products} products collected")
+                    break
 
-                    products = self.crawl_page(page_num)
+                # 다음 페이지로 이동
+                page_num += 1
 
-                    if not products:
-                        print(f"[WARNING] No products found at page {page_num}, stopping crawler...")
-                        break
-
-                    # 100개 초과 방지: 남은 개수만큼만 저장
-                    remaining = self.max_products - total_products
-                    products_to_save = products[:remaining]
-
-                    saved_count = self.save_products(products_to_save)
-                    total_products += saved_count
-
-                    # 목표 달성 확인
-                    if total_products >= self.max_products:
-                        print(f"[INFO] Target reached: {total_products} products collected")
-                        break
-
-                    # 다음 페이지로 이동
-                    page_num += 1
-
-                    # 페이지 간 대기
-                    time.sleep(30)
+                # 페이지 간 대기
+                time.sleep(30)
 
             # 결과 출력
             print("\n" + "="*60)

@@ -409,23 +409,15 @@ if __name__ == "__main__":
     print("Amazon Login Script for HHP Crawler")
     print("="*80)
 
-    try:
-        driver = test_login_with_cookies()
+    driver = test_login_with_cookies()
 
-        if driver:
-            print("\n" + "=" * 80)
-            print("Login test completed successfully!")
-            print("You can now use the saved cookies for crawling")
-            print(f"Cookie file: {COOKIE_FILE}")
-            print("=" * 80)
+    if driver:
+        print("\n" + "=" * 80)
+        print("Login test completed successfully!")
+        print("You can now use the saved cookies for crawling")
+        print(f"Cookie file: {COOKIE_FILE}")
+        print("=" * 80)
 
-            input("\nPress Enter to close browser...")
-            driver.quit()
-        else:
-            print("\n[FAILED] Login test failed")
-    except Exception as e:
-        print(f"\n[CRITICAL ERROR] {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        input("\nPress Enter to exit...")
+        driver.quit()
+    else:
+        print("\n[FAILED] Login test failed")

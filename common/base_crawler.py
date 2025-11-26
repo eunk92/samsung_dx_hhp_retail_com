@@ -317,7 +317,7 @@ class BaseCrawler:
         except Exception as e:
             print(f"[WARNING] Failed to cleanup old logs: {e}")
 
-    def save_cookies(self, account_name, cookie_file='cookies/amazon_cookies.pkl'):
+    def save_cookies(self, account_name):
         """
         현재 세션의 쿠키를 파일로 저장
 
@@ -327,12 +327,14 @@ class BaseCrawler:
 
         Args:
             account_name (str): 쇼핑몰명 (Amazon, Bestbuy, Walmart)
-            cookie_file (str): 쿠키 저장 경로
 
         Returns:
             None
         """
         try:
+            # account_name 기반으로 쿠키 파일 경로 생성
+            cookie_file = f'cookies/{account_name.lower()}_cookies.pkl'
+
             # cookies 디렉토리 생성
             os.makedirs('cookies', exist_ok=True)
 
@@ -346,7 +348,7 @@ class BaseCrawler:
         except Exception as e:
             print(f"[WARNING] Failed to save cookies: {e}")
 
-    def load_cookies(self, account_name, cookie_file='cookies/amazon_cookies.pkl'):
+    def load_cookies(self, account_name):
         """
         저장된 쿠키를 로드하여 세션 복원
 
@@ -357,12 +359,14 @@ class BaseCrawler:
 
         Args:
             account_name (str): 쇼핑몰명 (Amazon, Bestbuy, Walmart)
-            cookie_file (str): 쿠키 파일 경로
 
         Returns:
             bool: 쿠키 로드 성공 시 True, 실패 시 False
         """
         try:
+            # account_name 기반으로 쿠키 파일 경로 생성
+            cookie_file = f'cookies/{account_name.lower()}_cookies.pkl'
+
             if not os.path.exists(cookie_file):
                 print(f"[INFO] No saved cookies found at {cookie_file}")
                 if account_name == 'Amazon':
