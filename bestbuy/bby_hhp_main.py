@@ -104,16 +104,24 @@ class BestBuyMainCrawler(BaseCrawler):
 
     def scroll_to_bottom(self):
         """
-        페이지 하단까지 스크롤하여 lazy-load 콘텐츠 로드
-        - 300px씩 점진적으로 스크롤하여 모든 제품이 로드되도록 함
+        페이지네이션 버튼이 나타날 때까지 스크롤
+        - 300px씩 점진적으로 스크롤
+        - 페이지네이션이 보이면 스크롤 종료
         """
         try:
             scroll_step = 300  # 300px씩 스크롤
             current_position = 0
+            max_scroll_attempts = 100  # 무한 루프 방지
 
-            while True:
-                # 현재 페이지 전체 높이
-                total_height = self.driver.execute_script("return document.body.scrollHeight")
+            # 페이지네이션 XPath (DB에서 로드)
+            pagination_xpath = self.xpaths.get('pagination', {}).get('xpath')
+
+            for _ in range(max_scroll_attempts):
+                # 페이지네이션이 보이는지 확인
+                pagination_elements = self.driver.find_elements(By.XPATH, pagination_xpath)
+                if pagination_elements:
+                    print(f"[INFO] Pagination found, stopping scroll")
+                    break
 
                 # 300px 아래로 스크롤
                 current_position += scroll_step
@@ -123,7 +131,9 @@ class BestBuyMainCrawler(BaseCrawler):
                 time.sleep(3)
 
                 # 페이지 끝에 도달했는지 확인
+                total_height = self.driver.execute_script("return document.body.scrollHeight")
                 if current_position >= total_height:
+                    print(f"[INFO] Reached page bottom")
                     break
 
             # 최종 로드 대기
