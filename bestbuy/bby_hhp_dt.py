@@ -136,7 +136,7 @@ class BestBuyDetailCrawler(BaseCrawler):
             return None
 
     def crawl_detail(self, product):
-        """상세 페이지 크롤링: 페이지 로드 → 스크롤 전 추출 → 스펙 추출 → 유사제품 추출 → 리뷰 추출 → product_list + detail 데이터 결합"""
+        """상세 페이지 크롤링: 페이지 로드 → 스크롤 전 추출 → 스크롤(최대 3번 재시도) 후 스펙 추출 → 유사제품 추출 → 리뷰 추출 → product_list + detail 데이터 결합"""
         try:
             product_url = product.get('product_url')
             if not product_url:
@@ -162,26 +162,30 @@ class BestBuyDetailCrawler(BaseCrawler):
             if specs_button_xpath:
                 specs_button_found = False
 
-                for attempt in range(1, 4):
-                    try:
-                        scroll_distance = 800 + (attempt * 300)
-                        self.driver.execute_script(f"window.scrollTo(0, {scroll_distance});")
-                        time.sleep(1)
-
-                        specs_button = WebDriverWait(self.driver, 5).until(
-                            EC.element_to_be_clickable((By.XPATH, specs_button_xpath))
-                        )
-                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", specs_button)
-                        time.sleep(1)
-
-                        specs_button.click()
-                        specs_button_found = True
-                        break
-                    except Exception:
-                        if attempt == 3:
-                            pass
-                        else:
+                for _ in range(3): 
+                    for attempt in range(3):  
+                        try:
+                            scroll_distance = 800 + (attempt * 300) 
+                            self.driver.execute_script(f"window.scrollTo(0, {scroll_distance});")
                             time.sleep(1)
+
+                            specs_button = WebDriverWait(self.driver, 5).until(
+                                EC.element_to_be_clickable((By.XPATH, specs_button_xpath))
+                            )
+                            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", specs_button)
+                            time.sleep(1)
+
+                            specs_button.click()
+                            specs_button_found = True
+                            break
+                        except Exception:
+                            time.sleep(1)
+
+                    if specs_button_found:
+                        break
+
+                    self.driver.execute_script("window.scrollTo(0, 0);")
+                    time.sleep(1)
 
                 if specs_button_found:
                     try:
