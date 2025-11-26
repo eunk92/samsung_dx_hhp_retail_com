@@ -1,11 +1,10 @@
 """
 Amazon Detail 페이지 크롤러
-- 개별 실행: test_mode=True (기본값), batch_id=None (최신 batch_id 자동 조회)
-- 통합 크롤러: test_mode 및 batch_id를 파라미터로 전달
+- 개별 실행: batch_id=None (하드코딩된 batch_id 사용)
+- 통합 크롤러: batch_id를 파라미터로 전달
 - product_list 테이블에서 해당 batch_id의 제품 URL 조회
 - 각 제품 상세 페이지에서 리뷰, 별점, 스펙 등 추출
-- 테스트 모드: 1개 제품만 크롤링
-- 운영 모드: 전체 제품 크롤링
+- batch_id 기준으로 조회된 모든 제품 크롤링
 """
 
 import sys
@@ -35,16 +34,13 @@ class AmazonDetailCrawler(BaseCrawler):
     Amazon Detail 페이지 크롤러
     """
 
-    def __init__(self, test_mode=True, batch_id=None, login_success=None):
+    def __init__(self, batch_id=None, login_success=None):
         """
         초기화
 
         Args:
-            test_mode (bool): 테스트 모드 (기본값: True)
-                             - True: 1개 제품만 크롤링
-                             - False: 전체 제품 크롤링
             batch_id (str): 배치 ID (기본값: None)
-                           - None: DB에서 최신 batch_id 자동 조회
+                           - None: 하드코딩된 batch_id 사용
                            - 문자열: 통합 크롤러에서 전달된 batch_id 사용
             login_success (bool): 로그인 성공 여부 (기본값: None)
                            - None: 개별 실행 시 (쿠키 로드 시도)
@@ -53,15 +49,11 @@ class AmazonDetailCrawler(BaseCrawler):
         """
         super().__init__()
 
-        self.test_mode = test_mode
         self.batch_id = batch_id
         self.account_name = 'Amazon'
         self.page_type = 'detail'
         self.cookies_loaded = False  # 쿠키 로드 여부 플래그
         self.login_success = login_success  # 로그인 성공 여부 (통합 크롤러에서 전달)
-
-        # 테스트 설정
-        self.test_count = 1  # 테스트 모드에서 크롤링할 제품 수
 
     def initialize(self):
         """
@@ -77,7 +69,6 @@ class AmazonDetailCrawler(BaseCrawler):
         """
         print("\n" + "="*60)
         print(f"[INFO] Amazon Detail Crawler Initialization")
-        print(f"[INFO] Test Mode: {'ON (1 product only)' if self.test_mode else 'OFF (all products)'}")
         print("="*60 + "\n")
 
         # 1. DB 연결
@@ -118,8 +109,8 @@ class AmazonDetailCrawler(BaseCrawler):
             bool: 로그인 성공 시 True, 실패 시 False
         """
         try:
-            # amazon_login.py 경로
-            login_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'amazon_login.py')
+            # amazon_hhp_login.py 경로
+            login_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'amazon_hhp_login.py')
 
             if not os.path.exists(login_script):
                 print(f"[ERROR] Login script not found: {login_script}")
@@ -230,9 +221,8 @@ class AmazonDetailCrawler(BaseCrawler):
                 }
                 products.append(product)
 
-            # 테스트 모드일 경우 1개만 반환
-            if self.test_mode:
-                products = products[:self.test_count]
+            # Detail 크롤러는 batch_id 기준으로 조회된 모든 제품 처리
+            # (테스트/운영 모드 구분 없이 product_list에 있는 모든 제품 크롤링)
 
             print(f"[INFO] Loaded {len(products)} products from amazon_hhp_product_list")
             return products
@@ -571,7 +561,7 @@ class AmazonDetailCrawler(BaseCrawler):
             current_url = self.driver.current_url
             if 'signin' in current_url or 'ap/signin' in current_url:
                 print(f"[ERROR] Login required for detail page. Current URL: {current_url}")
-                print(f"[INFO] Please run: python amazon_login.py to refresh cookies")
+                print(f"[INFO] Please run: python amazon_hhp_login.py to refresh cookies")
                 return product  # 기본 product_list 데이터만 반환
 
             # Bot 감지 확인 및 CAPTCHA 자동 해결
@@ -1056,10 +1046,10 @@ class AmazonDetailCrawler(BaseCrawler):
 
 def main():
     """
-    개별 실행 시 진입점 (테스트 모드)
-    - 최신 batch_id를 DB에서 자동 조회하여 1개 제품만 크롤링
+    개별 실행 시 진입점
+    - 하드코딩된 batch_id 기준으로 모든 제품 크롤링
     """
-    crawler = AmazonDetailCrawler(test_mode=True, batch_id=None)
+    crawler = AmazonDetailCrawler(batch_id=None)
     success = crawler.run()
 
     if success:

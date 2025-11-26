@@ -4,7 +4,7 @@ Amazon Login Script for HHP Crawler
 - Detail 크롤러에서 리뷰 수집을 위해 필요
 
 사용법:
-    python amazon/amazon_login.py
+    python amazon/amazon_hhp_login.py
 
 주의사항:
     - config.py에 Amazon 계정 정보 설정 필요

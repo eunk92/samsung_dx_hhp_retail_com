@@ -55,8 +55,8 @@ class AmazonIntegratedCrawlerTest:
             bool: 로그인 성공 시 True, 실패 시 False
         """
         try:
-            # amazon_login.py 경로
-            login_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'amazon_login.py')
+            # amazon_hhp_login.py 경로
+            login_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'amazon_hhp_login.py')
 
             if not os.path.exists(login_script):
                 print(f"[ERROR] Login script not found: {login_script}")
@@ -187,7 +187,7 @@ class AmazonIntegratedCrawlerTest:
             print("STEP 4: Detail Crawler (All Products)")
             print("="*80 + "\n")
 
-            detail_crawler = AmazonDetailCrawler(test_mode=True, batch_id=self.batch_id, login_success=self.login_success)
+            detail_crawler = AmazonDetailCrawler(batch_id=self.batch_id, login_success=self.login_success)
             detail_success = detail_crawler.run()
 
             if not detail_success:
