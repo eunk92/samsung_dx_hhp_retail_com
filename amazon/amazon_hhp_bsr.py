@@ -112,6 +112,7 @@ class AmazonBSRCrawler(BaseCrawler):
                         'retailer_sku_name': self.safe_extract(item, 'retailer_sku_name'),
                         'final_sku_price': self.safe_extract(item, 'final_sku_price'),
                         'bsr_rank': bsr_rank,
+                        'page_number': page_number,
                         'product_url': product_url,
                         'calendar_week': self.calendar_week,
                         'crawl_strdatetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -158,7 +159,7 @@ class AmazonBSRCrawler(BaseCrawler):
             # UPDATE 처리
             update_query = """
                 UPDATE amazon_hhp_product_list
-                SET bsr_rank = %s
+                SET bsr_rank = %s, bsr_page_number = %s
                 WHERE account_name = %s AND batch_id = %s AND product_url = %s
             """
 
@@ -166,6 +167,7 @@ class AmazonBSRCrawler(BaseCrawler):
                 try:
                     cursor.execute(update_query, (
                         product['bsr_rank'],
+                        product['page_number'],
                         self.account_name,
                         product['batch_id'],
                         product['product_url']
@@ -180,10 +182,10 @@ class AmazonBSRCrawler(BaseCrawler):
                 insert_query = """
                     INSERT INTO amazon_hhp_product_list (
                         account_name, page_type, retailer_sku_name,
-                        final_sku_price, bsr_rank, product_url,
+                        final_sku_price, bsr_rank, bsr_page_number, product_url,
                         calendar_week, crawl_strdatetime, batch_id
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                 """
 
@@ -197,6 +199,7 @@ class AmazonBSRCrawler(BaseCrawler):
                         product['retailer_sku_name'],
                         product['final_sku_price'],
                         product['bsr_rank'],
+                        product['page_number'],
                         product['product_url'],
                         product['calendar_week'],
                         product['crawl_strdatetime'],

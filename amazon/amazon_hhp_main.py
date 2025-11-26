@@ -117,6 +117,7 @@ class AmazonMainCrawler(BaseCrawler):
                         'available_quantity_for_purchase': self.safe_extract(item, 'available_quantity_for_purchase'),
                         'discount_type': self.safe_extract(item, 'discount_type'),
                         'main_rank': self.current_rank,
+                        'page_number': page_number,
                         'product_url': product_url,
                         'calendar_week': self.calendar_week,
                         'crawl_strdatetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -148,10 +149,10 @@ class AmazonMainCrawler(BaseCrawler):
                     account_name, page_type, retailer_sku_name,
                     number_of_units_purchased_past_month, final_sku_price, original_sku_price,
                     shipping_info, available_quantity_for_purchase, discount_type,
-                    main_rank, product_url,
+                    main_rank, main_page_number, product_url,
                     calendar_week, crawl_strdatetime, batch_id
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """
 
@@ -171,6 +172,7 @@ class AmazonMainCrawler(BaseCrawler):
                     product['available_quantity_for_purchase'],
                     product['discount_type'],
                     product['main_rank'],
+                    product['page_number'],
                     product['product_url'],
                     product['calendar_week'],
                     product['crawl_strdatetime'],
