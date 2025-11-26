@@ -116,7 +116,7 @@ class BestBuyMainCrawler(BaseCrawler):
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
 
                 # 콘텐츠 로드 대기
-                time.sleep()
+                time.sleep(5)
 
                 # 새로운 스크롤 높이 확인
                 new_height = self.driver.execute_script("return document.body.scrollHeight")
