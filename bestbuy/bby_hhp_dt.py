@@ -1,11 +1,10 @@
 """
 BestBuy Detail 페이지 크롤러
-- 개별 실행: test_mode=True (기본값), batch_id 입력
-- 통합 크롤러: test_mode 및 batch_id를 파라미터로 전달
+- 통합 크롤러에서 batch_id를 전달받아 실행
 - product_list 테이블에서 해당 batch_id의 제품 URL 조회
 - 각 제품 상세 페이지에서 리뷰, 별점, 스펙 등 추출
 - Main/BSR/Trend에서 수집한 모든 제품 처리
-- hhp_retail_com 및 bby_hhp_mst 테이블에 저장
+- hhp_retail_com 테이블에 저장
 """
 
 import sys
@@ -33,26 +32,18 @@ class BestBuyDetailCrawler(BaseCrawler):
     BestBuy Detail 페이지 크롤러
     """
 
-    def __init__(self, test_mode=True, batch_id=None):
+    def __init__(self, batch_id=None):
         """
         초기화
 
         Args:
-            test_mode (bool): 테스트 모드 (기본값: True)
-                             - True: 1개 제품만 크롤링
-                             - False: 전체 제품 크롤링
-            batch_id (str): 배치 ID (기본값: None)
-                           - None: 기본값 사용 (b_20251125_012112)
-                           - 문자열: 통합 크롤러에서 전달된 배치 ID 사용
+            batch_id (str): 배치 ID (필수)
+                           - 통합 크롤러에서 전달된 배치 ID 사용
         """
         super().__init__()
-        self.test_mode = test_mode
         self.account_name = 'Bestbuy'
         self.page_type = 'detail'
         self.batch_id = batch_id
-
-        # 테스트 설정
-        self.test_count = 1  # 테스트 모드에서 처리할 제품 수
 
     def initialize(self):
         """
@@ -62,26 +53,25 @@ class BestBuyDetailCrawler(BaseCrawler):
         """
         print("\n" + "="*60)
         print(f"[INFO] BestBuy Detail Crawler Initialization")
-        print(f"[INFO] Test Mode: {'ON (1 product)' if self.test_mode else 'OFF (all products)'}")
         print("="*60 + "\n")
 
-        # 1. DB 연결
-        if not self.connect_db():
-            return False
-
-        # 2. XPath 셀렉터 로드
-        if not self.load_xpaths(self.account_name, self.page_type):
-            return False
-
-        # 3. WebDriver 설정
-        self.setup_driver()
-
-        # 4. 배치 ID 설정 (없으면 기본값 사용)
+        # 1. 배치 ID 설정 (없으면 기본값 사용)
         if not self.batch_id:
-            self.batch_id = 'b_20251125_014141'
+            self.batch_id = 'b_20251126_025003'
             print(f"[INFO] Using default Batch ID: {self.batch_id}")
         else:
             print(f"[INFO] Batch ID received: {self.batch_id}")
+
+        # 2. DB 연결
+        if not self.connect_db():
+            return False
+
+        # 3. XPath 셀렉터 로드
+        if not self.load_xpaths(self.account_name, self.page_type):
+            return False
+
+        # 4. WebDriver 설정
+        self.setup_driver()
 
         # 5. 오래된 로그 정리
         self.cleanup_old_logs()
@@ -120,12 +110,8 @@ class BestBuyDetailCrawler(BaseCrawler):
                 WHERE account_name = %s
                   AND batch_id = %s
                   AND product_url IS NOT NULL
-                ORDER BY product_url, id
+                ORDER BY id
             """
-
-            # 테스트 모드일 때 LIMIT 추가
-            if self.test_mode:
-                query += f" LIMIT {self.test_count}"
 
             cursor.execute(query, (self.account_name, self.batch_id))
             rows = cursor.fetchall()
@@ -760,9 +746,9 @@ class BestBuyDetailCrawler(BaseCrawler):
 
 def main():
     """
-    개별 실행 시 진입점 (테스트 모드 ON)
+    개별 실행 시 진입점 (기본 배치 ID 사용)
     """
-    crawler = BestBuyDetailCrawler(test_mode=True)
+    crawler = BestBuyDetailCrawler()
     success = crawler.run()
 
     if success:
