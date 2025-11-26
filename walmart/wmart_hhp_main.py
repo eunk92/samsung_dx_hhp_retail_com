@@ -110,6 +110,12 @@ class WalmartMainCrawler(BaseCrawler):
     def setup_playwright(self):
         """Playwright 브라우저 설정"""
         try:
+            # Windows TEMP 폴더 문제 해결
+            temp_dir = 'C:\\Temp'
+            os.makedirs(temp_dir, exist_ok=True)
+            os.environ['TEMP'] = temp_dir
+            os.environ['TMP'] = temp_dir
+
             self.playwright = sync_playwright().start()
 
             self.browser = self.playwright.chromium.launch(
