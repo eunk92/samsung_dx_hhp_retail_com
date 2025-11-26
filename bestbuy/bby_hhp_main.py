@@ -105,27 +105,26 @@ class BestBuyMainCrawler(BaseCrawler):
     def scroll_to_bottom(self):
         """
         페이지 하단까지 스크롤하여 lazy-load 콘텐츠 로드
-        - 점진적으로 스크롤하여 모든 제품이 로드되도록 함
+        - 300px씩 점진적으로 스크롤하여 모든 제품이 로드되도록 함
         """
         try:
-            # 현재 스크롤 높이
-            last_height = self.driver.execute_script("return document.body.scrollHeight")
+            scroll_step = 300  # 300px씩 스크롤
+            current_position = 0
 
             while True:
-                # 페이지 하단으로 스크롤
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                # 현재 페이지 전체 높이
+                total_height = self.driver.execute_script("return document.body.scrollHeight")
+
+                # 300px 아래로 스크롤
+                current_position += scroll_step
+                self.driver.execute_script(f"window.scrollTo(0, {current_position});")
 
                 # 콘텐츠 로드 대기
-                time.sleep(5)
+                time.sleep(3)
 
-                # 새로운 스크롤 높이 확인
-                new_height = self.driver.execute_script("return document.body.scrollHeight")
-
-                # 더 이상 스크롤할 내용이 없으면 종료
-                if new_height == last_height:
+                # 페이지 끝에 도달했는지 확인
+                if current_position >= total_height:
                     break
-
-                last_height = new_height
 
             # 최종 로드 대기
             time.sleep(2)
