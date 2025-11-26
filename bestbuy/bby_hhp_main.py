@@ -13,6 +13,9 @@ import time
 import traceback
 from datetime import datetime
 from lxml import html
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # 공통 환경 설정 (작업 디렉토리, 한글 출력, 경로 설정)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,11 +50,7 @@ class BestBuyMainCrawler(BaseCrawler):
         self.calendar_week = None
         self.url_template = None
 
-        # 테스트 설정
-        self.test_page = 1
-        self.test_count = 1
-
-        # 운영 모드 설정
+        self.test_count = 3  # 테스트 모드 목표: 3개 제품 수집
         self.max_products = 300  # 운영 모드 목표: 300개 제품 수집
         self.current_rank = 0
 
@@ -103,6 +102,38 @@ class BestBuyMainCrawler(BaseCrawler):
 
         return True
 
+    def scroll_to_bottom(self):
+        """
+        페이지 하단까지 스크롤하여 lazy-load 콘텐츠 로드
+        - 점진적으로 스크롤하여 모든 제품이 로드되도록 함
+        """
+        try:
+            # 현재 스크롤 높이
+            last_height = self.driver.execute_script("return document.body.scrollHeight")
+
+            while True:
+                # 페이지 하단으로 스크롤
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+
+                # 콘텐츠 로드 대기
+                time.sleep()
+
+                # 새로운 스크롤 높이 확인
+                new_height = self.driver.execute_script("return document.body.scrollHeight")
+
+                # 더 이상 스크롤할 내용이 없으면 종료
+                if new_height == last_height:
+                    break
+
+                last_height = new_height
+
+            # 최종 로드 대기
+            time.sleep(2)
+            print(f"[INFO] Scroll completed, page fully loaded")
+
+        except Exception as e:
+            print(f"[WARNING] Scroll failed: {e}")
+
     def crawl_page(self, page_number):
         """
         특정 페이지 크롤링
@@ -116,32 +147,48 @@ class BestBuyMainCrawler(BaseCrawler):
             url = self.url_template.replace('{page}', str(page_number))
             print(f"\n[INFO] Crawling page {page_number}: {url}")
 
-            # 페이지 로드
-            self.driver.get(url)
-            time.sleep(30)
-
-            # HTML 파싱
-            page_html = self.driver.page_source
-            tree = html.fromstring(page_html)
-
             # 제품 리스트 XPath
             base_container_xpath = self.xpaths.get('base_container', {}).get('xpath')
             if not base_container_xpath:
                 print("[ERROR] base_container XPath not found")
                 return []
 
-            # 제품 아이템 추출
-            base_containers = tree.xpath(base_container_xpath)
-            print(f"[INFO] Found {len(base_containers)} products on page {page_number}")
+            # 1. 페이지 로드 -> 스크롤 -> 30초 대기
+            self.driver.get(url)
+            time.sleep(10)  # 초기 로드 대기
 
-            # 테스트 모드일 때는 설정된 범위만, 운영 모드일 때는 전체 처리
-            if self.test_mode:
-                containers_to_process = base_containers[:self.test_count]
-            else:
-                containers_to_process = base_containers
+            print(f"[INFO] Scrolling to load all products...")
+            self.scroll_to_bottom()
+            time.sleep(30)  # 스크롤 후 30초 대기
+
+            # 제품 추출 (최대 3번 시도, 리로드 없이 HTML 재파싱)
+            base_containers = []
+            max_retries = 3
+            expected_products = 24  # 1페이지 기준 24개 제품
+
+            for attempt in range(1, max_retries + 1):
+                # HTML 파싱
+                page_html = self.driver.page_source
+                tree = html.fromstring(page_html)
+
+                # 제품 아이템 추출
+                base_containers = tree.xpath(base_container_xpath)
+                print(f"[INFO] Found {len(base_containers)} products on page {page_number} (attempt {attempt}/{max_retries})")
+
+                # 24개 이상 로드되었으면 성공
+                if len(base_containers) >= expected_products:
+                    print(f"[INFO] All products loaded successfully")
+                    break
+
+                # 24개 미만이면 대기 후 재파싱
+                if attempt < max_retries:
+                    print(f"[WARNING] Only {len(base_containers)} products found, waiting 10s and retrying...")
+                    time.sleep(10)  # 10초 대기 후 재파싱
+                else:
+                    print(f"[WARNING] Could not load {expected_products} products after {max_retries} attempts, proceeding with {len(base_containers)} products")
 
             products = []
-            for idx, item in enumerate(containers_to_process, 1):
+            for idx, item in enumerate(base_containers, 1):
                 try:
                     # main_rank 계산 (페이지별 연속 증가)
                     self.current_rank += 1
@@ -164,6 +211,7 @@ class BestBuyMainCrawler(BaseCrawler):
                         'sku_status': self.extract_with_fallback(item, self.xpaths.get('sku_status', {}).get('xpath')),
                         'promotion_type': self.extract_with_fallback(item, self.xpaths.get('promotion_type', {}).get('xpath')),
                         'main_rank': self.current_rank,
+                        'page_number': page_number,
                         'product_url': product_url,
                         'calendar_week': self.calendar_week,
                         'crawl_strdatetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -173,7 +221,7 @@ class BestBuyMainCrawler(BaseCrawler):
                     products.append(product_data)
 
                 except Exception as e:
-                    print(f"[WARNING] Failed to extract product {idx}/{len(containers_to_process)}, skipping: {e}")
+                    print(f"[WARNING] Failed to extract product {idx}/{len(base_containers)}, skipping: {e}")
                     continue
 
             return products
@@ -201,15 +249,15 @@ class BestBuyMainCrawler(BaseCrawler):
                     account_name, page_type, retailer_sku_name,
                     final_sku_price, savings, comparable_pricing,
                     offer, pick_up_availability, shipping_availability, delivery_availability,
-                    sku_status, promotion_type, main_rank, product_url,
+                    sku_status, promotion_type, main_rank, page_number, product_url,
                     calendar_week, crawl_strdatetime, batch_id
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """
 
             # 배치 크기 설정 (50개씩 나눠서 저장)
-            BATCH_SIZE = 50
+            BATCH_SIZE = 10
             total_saved = 0
 
             # 50개씩 쪼개서 저장
@@ -235,6 +283,7 @@ class BestBuyMainCrawler(BaseCrawler):
                             product['sku_status'],
                             product['promotion_type'],
                             product['main_rank'],
+                            product['page_number'],
                             product['product_url'],
                             product['calendar_week'],
                             product['crawl_strdatetime'],
@@ -291,44 +340,38 @@ class BestBuyMainCrawler(BaseCrawler):
 
             total_products = 0
 
-            if self.test_mode:
-                # 테스트 모드: 1페이지에서 2개 제품만 크롤링 및 DB 저장
-                self.current_rank = 0
-                products = self.crawl_page(self.test_page)
-                saved_count = self.save_products(products)
-                total_products += saved_count
-            else:
-                # 운영 모드: 400개 제품이 수집될 때까지 계속 크롤링
-                self.current_rank = 0
-                page_num = 1
+            # 목표 제품 수 설정 (테스트/운영 모드에 따라)
+            target_products = self.test_count if self.test_mode else self.max_products
+            self.current_rank = 0
+            page_num = 1
 
-                while total_products < self.max_products:
-                    products = self.crawl_page(page_num)
+            while total_products < target_products:
+                products = self.crawl_page(page_num)
 
-                    if not products:
-                        print(f"[WARNING] No products found at page {page_num}")
-                        # 연속 2페이지 빈 페이지면 종료
-                        if page_num > 1:
-                            print(f"[INFO] No more products available, stopping...")
-                            break
-                    else:
-                        # 400개 초과 방지: 남은 개수만큼만 저장
-                        remaining = self.max_products - total_products
-                        products_to_save = products[:remaining]
+                if not products:
+                    print(f"[WARNING] No products found at page {page_num}")
+                    # 연속 2페이지 빈 페이지면 종료
+                    if page_num > 1:
+                        print(f"[INFO] No more products available, stopping...")
+                        break
+                else:
+                    # 목표 초과 방지: 남은 개수만큼만 저장
+                    remaining = target_products - total_products
+                    products_to_save = products[:remaining]
 
-                        saved_count = self.save_products(products_to_save)
-                        total_products += saved_count
+                    saved_count = self.save_products(products_to_save)
+                    total_products += saved_count
 
-                        print(f"[INFO] Progress: {total_products}/{self.max_products} products collected")
+                    print(f"[INFO] Progress: {total_products}/{target_products} products collected")
 
-                        # 400개 도달 확인
-                        if total_products >= self.max_products:
-                            print(f"[INFO] Reached target product count ({self.max_products}), stopping...")
-                            break
+                    # 목표 도달 확인
+                    if total_products >= target_products:
+                        print(f"[INFO] Reached target product count ({target_products}), stopping...")
+                        break
 
-                    # 페이지 간 대기
-                    time.sleep(30)
-                    page_num += 1
+                # 페이지 간 대기
+                time.sleep(30)
+                page_num += 1
 
             # 결과 출력
             print("\n" + "="*60)
