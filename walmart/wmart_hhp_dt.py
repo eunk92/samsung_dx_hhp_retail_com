@@ -122,7 +122,6 @@ class WalmartDetailCrawler(BaseCrawler):
                         text = temp_button.inner_text(timeout=2000).upper()
                         if ('PRESS' in text and 'HOLD' in text) or 'CAPTCHA' in text:
                             button = temp_button
-                            print(f"[WARNING] CAPTCHA detected")
                             break
                 except:
                     continue
@@ -130,7 +129,6 @@ class WalmartDetailCrawler(BaseCrawler):
             if not button:
                 return True
 
-            print("[INFO] Attempting to solve CAPTCHA...")
             box = button.bounding_box()
             if box:
                 center_x = box['x'] + box['width'] / 2
@@ -151,10 +149,9 @@ class WalmartDetailCrawler(BaseCrawler):
                         print("[OK] CAPTCHA solved")
                         return True
                     else:
-                        print("[WARNING] CAPTCHA still visible - waiting 60s...")
                         time.sleep(60)
                         return True
-                except:
+                except Exception as e:
                     return True
 
             return False
@@ -173,30 +170,13 @@ class WalmartDetailCrawler(BaseCrawler):
             return False
 
         if not self.batch_id:
-            self.batch_id = self.get_latest_batch_id(self.account_name)
+            self.batch_id = 'w_20251127_123456'
             if not self.batch_id:
                 print("[ERROR] No batch_id found")
                 return False
             print(f"[INFO] Using latest batch_id: {self.batch_id}")
 
         return True
-
-    def get_latest_batch_id(self, account_name):
-        """가장 최근 batch_id 조회"""
-        try:
-            cursor = self.db_conn.cursor()
-            cursor.execute("""
-                SELECT batch_id FROM wmart_hhp_product_list
-                WHERE account_name = %s
-                ORDER BY crawl_strdatetime DESC
-                LIMIT 1
-            """, (account_name,))
-            result = cursor.fetchone()
-            cursor.close()
-            return result[0] if result else None
-        except Exception as e:
-            print(f"[ERROR] Failed to get latest batch_id: {e}")
-            return None
 
     def load_product_list(self):
         """wmart_hhp_product_list 테이블에서 제품 URL 및 기본 정보 조회"""
@@ -599,7 +579,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
             def product_to_tuple(product):
                 return (
-                    'US', 'HHP', product.get('item'),
+                    'SEA', 'HHP', product.get('item'),
                     self.account_name, product.get('page_type'),
                     product.get('count_of_reviews'), product.get('retailer_sku_name'),
                     product.get('product_url'), product.get('star_rating'),

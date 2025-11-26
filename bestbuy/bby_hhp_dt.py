@@ -431,7 +431,7 @@ class BestBuyDetailCrawler(BaseCrawler):
 
             def product_to_tuple(product):
                 return (
-                    'US', 'HHP', product.get('item'), self.account_name, product.get('page_type'),
+                    'SEA', 'HHP', product.get('item'), self.account_name, product.get('page_type'),
                     product.get('count_of_reviews'), product.get('retailer_sku_name'), product.get('product_url'),
                     product.get('star_rating'), product.get('count_of_star_ratings'), product.get('sku_popularity'),
                     product.get('final_sku_price'), product.get('original_sku_price'), product.get('savings'), product.get('discount_type'),
