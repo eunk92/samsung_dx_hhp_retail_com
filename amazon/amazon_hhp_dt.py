@@ -245,18 +245,21 @@ class AmazonDetailCrawler(BaseCrawler):
     def extract_reviews_from_detail_page(self, tree, max_reviews=10):
         """상세 페이지에서 리뷰 추출 (하드코딩 XPath)"""
         try:
-            review_xpath = "//ul[@id='cm-cr-dp-review-list']//div[@data-hook='review-collapsed']//span/text()"
-            review_texts = tree.xpath(review_xpath)
+            # 리뷰 컨테이너 단위로 추출 (text() 대신 element 단위)
+            review_container_xpath = "//ul[@id='cm-cr-dp-review-list']//div[@data-hook='review-collapsed']"
+            review_containers = tree.xpath(review_container_xpath)
 
-            if not review_texts:
+            if not review_containers:
                 return data_extractor.get_no_reviews_text(self.account_name)
 
-            review_texts = review_texts[:max_reviews]
+            review_containers = review_containers[:max_reviews]
 
             cleaned_reviews = []
-            for review in review_texts:
-                if review.strip():
-                    cleaned = ' '.join(review.split())
+            for container in review_containers:
+                # 각 컨테이너 내의 모든 텍스트를 합침
+                review_text = container.text_content()
+                if review_text:
+                    cleaned = ' '.join(review_text.split())
                     if len(cleaned) > 10:
                         cleaned_reviews.append(cleaned)
 
@@ -264,7 +267,6 @@ class AmazonDetailCrawler(BaseCrawler):
                 return data_extractor.get_no_reviews_text(self.account_name)
 
             result = ' ||| '.join(cleaned_reviews)
-            print(f"[INFO] Reviews: {len(cleaned_reviews)}, Length: {len(result)}")
             return result
 
         except Exception as e:
