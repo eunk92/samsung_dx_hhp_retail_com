@@ -526,6 +526,58 @@ class BaseCrawler:
             print(f"[ERROR] Failed to update product rank: {e}")
             return False
 
+    def save_log(self, account_name, batch_id, start_time, end_time, crawl_results, resume_from=None):
+        """
+        통합 크롤러 실행 결과를 로그 파일로 저장
+
+        쓰임새:
+        - 통합 크롤러 종료 시 실행 결과를 텍스트 파일로 저장
+        - logs/{쇼핑몰명}/{쇼핑몰명}_{batch_id}.txt 형식으로 저장
+
+        Args:
+            account_name (str): 쇼핑몰명 (Amazon, Bestbuy, Walmart)
+            batch_id (str): 배치 ID
+            start_time (datetime): 크롤링 시작 시간
+            end_time (datetime): 크롤링 종료 시간
+            crawl_results (dict): 각 단계별 결과 {'main': True/False/'skipped', ...}
+            resume_from (str): 재시작 단계 (옵션)
+
+        Returns:
+            None
+        """
+        try:
+            # logs 폴더 경로 (프로젝트 루트/logs/{쇼핑몰명})
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            shop_folder = account_name.lower()
+            logs_dir = os.path.join(project_root, 'logs', shop_folder)
+            os.makedirs(logs_dir, exist_ok=True)
+
+            # 로그 파일명: {쇼핑몰명}_{batch_id}.txt
+            log_file = os.path.join(logs_dir, f"{shop_folder}_{batch_id}.txt")
+
+            # 소요 시간 계산
+            elapsed = (end_time - start_time).total_seconds()
+
+            with open(log_file, 'w', encoding='utf-8') as f:
+                f.write("="*60 + "\n")
+                f.write(f"{account_name} Integrated Crawler\n")
+                f.write("="*60 + "\n")
+                f.write(f"batch_id: {batch_id}\n")
+                f.write(f"start_time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"end_time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"elapsed: {elapsed/60:.1f}분\n")
+                if resume_from:
+                    f.write(f"resume_from: {resume_from}\n")
+                f.write("\n[Results]\n")
+                for step, result in crawl_results.items():
+                    status = "SKIP" if result == 'skipped' else "OK" if result else "FAIL"
+                    f.write(f"  {step}: {status}\n")
+                f.write("="*60 + "\n")
+
+            print(f"[LOG] {log_file}")
+        except Exception as e:
+            print(f"[WARNING] Failed to save log: {e}")
+
     def retry_on_network_error(self, func, max_retries=3, delay=5):
         """
         네트워크 에러 발생 시 재시도 데코레이터
