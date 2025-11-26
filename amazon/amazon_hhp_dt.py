@@ -262,7 +262,8 @@ class AmazonDetailCrawler(BaseCrawler):
             if not cleaned_reviews:
                 return data_extractor.get_no_reviews_text(self.account_name)
 
-            result = ' ||| '.join(cleaned_reviews)
+            formatted_reviews = [f"review{idx} - {review}" for idx, review in enumerate(cleaned_reviews, 1)]
+            result = ' ||| '.join(formatted_reviews)
             return result
 
         except Exception as e:
