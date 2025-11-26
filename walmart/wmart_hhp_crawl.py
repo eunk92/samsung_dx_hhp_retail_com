@@ -1,9 +1,35 @@
 """
-Walmart 통합 크롤러 (운영용)
-- Main → BSR → Detail 순차 실행
+Walmart HHP 통합 크롤러 (운영용)
+
+================================================================================
+실행 흐름: Main → BSR → Detail
+================================================================================
+STEP 1. Main   - 검색 결과 페이지에서 제품 목록 수집 (최대 300개)
+STEP 2. BSR    - Best Seller 페이지에서 제품 목록 수집 (최대 100개)
+STEP 3. Detail - 수집된 모든 제품의 상세 페이지 크롤링
+
+================================================================================
+주요 특징
+================================================================================
 - 동일한 batch_id로 전체 파이프라인 실행
-- 운영 모드: Main(최대 400개) + BSR(2페이지) + Detail(전체)
-- 재시작 기능: --resume-from 옵션으로 특정 단계부터 재개 가능
+- 각 크롤러 실패 시에도 다음 단계 계속 진행
+- --resume-from 옵션으로 특정 단계부터 재개 가능
+
+================================================================================
+사용법
+================================================================================
+# 처음부터 실행
+python wmart_hhp_crawl.py
+
+# 특정 단계부터 재시작
+python wmart_hhp_crawl.py --resume-from detail --batch-id w_20250123_143045
+python wmart_hhp_crawl.py --resume-from bsr --batch-id w_20250123_143045
+
+================================================================================
+저장 테이블
+================================================================================
+- Main/BSR     → wmart_hhp_product_list (제품 목록)
+- Detail       → hhp_retail_com (상세 정보 + 리뷰)
 """
 
 import sys
@@ -23,18 +49,13 @@ from common.base_crawler import BaseCrawler
 
 
 class WalmartIntegratedCrawler:
-    """
-    Walmart 통합 크롤러 (운영용)
-    Main → BSR → Detail 순차 실행
-    """
+    """Walmart 통합 크롤러 (운영용)"""
 
     def __init__(self, resume_from=None, batch_id=None):
         """
-        초기화
-
         Args:
-            resume_from (str): 재시작할 단계 ('main', 'bsr', 'detail', None)
-            batch_id (str): 재시작 시 사용할 배치 ID (resume_from 사용 시 필수)
+            resume_from: 재시작 단계 ('main'/'bsr'/'detail'/None)
+            batch_id: 재시작 시 사용할 배치 ID
         """
         self.account_name = 'Walmart'
         self.batch_id = batch_id
@@ -44,161 +65,98 @@ class WalmartIntegratedCrawler:
         self.base_crawler = BaseCrawler()
 
     def run(self):
-        """
-        통합 크롤러 실행
-
-        실행 순서:
-        0. 통합 크롤러에서 batch_id 생성 (또는 기존 batch_id 사용)
-        1. Main 크롤러 (운영 모드: 최대 400개 제품)
-        2. BSR 크롤러 (운영 모드: 2페이지)
-        3. Detail 크롤러 (Main + BSR에서 수집한 모든 제품)
-
-        Returns: bool: 성공 시 True, 실패 시 False
-        """
+        """통합 크롤러 실행. Returns: bool"""
         self.start_time = datetime.now()
 
         # batch_id 생성 또는 재사용
         if not self.batch_id:
             self.batch_id = self.base_crawler.generate_batch_id(self.account_name)
-            print(f"[INFO] New Batch ID generated: {self.batch_id}")
-        else:
-            print(f"[INFO] Resuming with Batch ID: {self.batch_id}")
 
-        print("\n" + "="*80)
-        print("Walmart Integrated Crawler (Production Mode)")
+        # 로깅 시작 (콘솔 출력을 파일에도 저장)
+        log_file = self.base_crawler.start_logging(self.account_name, self.batch_id)
+
+        print("\n" + "="*60)
+        print("Walmart Integrated Crawler (Production)")
+        print("="*60)
+        print(f"batch_id: {self.batch_id}")
+        if log_file:
+            print(f"log_file: {log_file}")
         if self.resume_from:
-            print(f"[RESUME MODE] Starting from: {self.resume_from.upper()}")
-        print("="*80)
-        print(f"[INFO] Start Time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"[INFO] Batch ID: {self.batch_id}")
-        print("="*80 + "\n")
+            print(f"resume_from: {self.resume_from}")
 
         try:
-            # ========================================
-            # STEP 1: Main 크롤러 실행 (운영 모드)
-            # ========================================
+            crawl_results = {'main': None, 'bsr': None, 'detail': None}
+
+            # STEP 1: Main
             if not self.resume_from or self.resume_from == 'main':
-                print("\n" + "="*80)
-                print("STEP 1: Main Crawler (Production Mode)")
-                print("="*80 + "\n")
-
-                main_crawler = WalmartMainCrawler(test_mode=False, batch_id=self.batch_id)
-                main_success = main_crawler.run()
-
-                if not main_success:
-                    print("\n[ERROR] Main crawler failed. Stopping integrated crawler.")
-                    return False
+                print(f"\n[STEP 1/3] Main Crawler...")
+                try:
+                    crawl_results['main'] = WalmartMainCrawler(test_mode=False, batch_id=self.batch_id).run()
+                except Exception as e:
+                    print(f"[ERROR] Main: {e}")
+                    crawl_results['main'] = False
             else:
-                print(f"\n[SKIP] Main Crawler (resume_from={self.resume_from})\n")
+                crawl_results['main'] = 'skipped'
 
-            # ========================================
-            # STEP 2: BSR 크롤러 실행 (운영 모드)
-            # ========================================
+            # STEP 2: BSR
             if not self.resume_from or self.resume_from in ['main', 'bsr']:
-                print("\n" + "="*80)
-                print("STEP 2: BSR Crawler (Production Mode)")
-                print("="*80 + "\n")
-
-                bsr_crawler = WalmartBSRCrawler(test_mode=False, batch_id=self.batch_id)
-                bsr_success = bsr_crawler.run()
-
-                if not bsr_success:
-                    print("\n[ERROR] BSR crawler failed. Stopping integrated crawler.")
-                    return False
+                print(f"\n[STEP 2/3] BSR Crawler...")
+                try:
+                    crawl_results['bsr'] = WalmartBSRCrawler(test_mode=False, batch_id=self.batch_id).run()
+                except Exception as e:
+                    print(f"[ERROR] BSR: {e}")
+                    crawl_results['bsr'] = False
             else:
-                print(f"\n[SKIP] BSR Crawler (resume_from={self.resume_from})\n")
+                crawl_results['bsr'] = 'skipped'
 
-            # ========================================
-            # STEP 3: Detail 크롤러 실행 (운영 모드)
-            # ========================================
-            print("\n" + "="*80)
-            print("STEP 3: Detail Crawler (Production Mode - All Products)")
-            print("="*80 + "\n")
+            # STEP 3: Detail
+            print(f"\n[STEP 3/3] Detail Crawler...")
+            try:
+                crawl_results['detail'] = WalmartDetailCrawler(batch_id=self.batch_id).run()
+            except Exception as e:
+                print(f"[ERROR] Detail: {e}")
+                crawl_results['detail'] = False
 
-            detail_crawler = WalmartDetailCrawler(test_mode=False, batch_id=self.batch_id)
-            detail_success = detail_crawler.run()
-
-            if not detail_success:
-                print("\n[ERROR] Detail crawler failed.")
-                return False
-
-            # ========================================
-            # 최종 결과 출력
-            # ========================================
+            # 결과 출력
             self.end_time = datetime.now()
-            elapsed_time = (self.end_time - self.start_time).total_seconds()
+            elapsed = (self.end_time - self.start_time).total_seconds()
 
-            print("\n" + "="*80)
-            print("Walmart Integrated Crawler - COMPLETED")
-            print("="*80)
-            print(f"[INFO] Batch ID: {self.batch_id}")
-            print(f"[INFO] Start Time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"[INFO] End Time: {self.end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"[INFO] Total Elapsed Time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
-            print("="*80 + "\n")
+            print("\n" + "="*60)
+            print(f"완료 ({elapsed/60:.1f}분)")
+            for step, result in crawl_results.items():
+                status = "SKIP" if result == 'skipped' else "OK" if result else "FAIL"
+                print(f"  {step}: {status}")
+            print("="*60)
 
-            return True
+            # 로깅 종료
+            self.base_crawler.stop_logging()
+
+            success_count = sum(1 for r in crawl_results.values() if r is True)
+            return success_count > 0
 
         except Exception as e:
             print(f"\n[ERROR] Integrated crawler failed: {e}")
             import traceback
             traceback.print_exc()
+            # 예외 발생 시에도 로깅 종료
+            self.base_crawler.stop_logging()
             return False
 
 
 def main():
-    """
-    운영용 통합 크롤러 진입점
-
-    사용법:
-        # 처음부터 실행
-        python wmart_hhp_crawl.py
-
-        # Detail부터 재시작
-        python wmart_hhp_crawl.py --resume-from detail --batch-id w_20250123_143045
-
-        # BSR부터 재시작
-        python wmart_hhp_crawl.py --resume-from bsr --batch-id w_20250123_143045
-    """
-    parser = argparse.ArgumentParser(
-        description='Walmart HHP Integrated Crawler (Production Mode)',
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-
-    parser.add_argument(
-        '--resume-from',
-        type=str,
-        choices=['main', 'bsr', 'detail'],
-        help='재시작할 단계 (main, bsr, detail)'
-    )
-
-    parser.add_argument(
-        '--batch-id',
-        type=str,
-        help='재시작 시 사용할 배치 ID (resume-from 사용 시 필수)'
-    )
-
+    """운영용 통합 크롤러 진입점"""
+    parser = argparse.ArgumentParser(description='Walmart HHP Integrated Crawler (Production)')
+    parser.add_argument('--resume-from', type=str, choices=['main', 'bsr', 'detail'])
+    parser.add_argument('--batch-id', type=str)
     args = parser.parse_args()
 
-    # 검증: resume-from 사용 시 batch-id 필수
     if args.resume_from and not args.batch_id:
         print("[ERROR] --batch-id is required when using --resume-from")
-        print("Example: python wmart_hhp_crawl.py --resume-from detail --batch-id w_20250123_143045")
         exit(1)
 
-    # 크롤러 실행
-    crawler = WalmartIntegratedCrawler(
-        resume_from=args.resume_from,
-        batch_id=args.batch_id
-    )
+    crawler = WalmartIntegratedCrawler(resume_from=args.resume_from, batch_id=args.batch_id)
     success = crawler.run()
-
-    if success:
-        print("\n[SUCCESS] Walmart Integrated Crawler completed successfully")
-        exit(0)
-    else:
-        print("\n[FAILED] Walmart Integrated Crawler failed")
-        exit(1)
+    exit(0 if success else 1)
 
 
 if __name__ == '__main__':
