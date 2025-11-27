@@ -290,6 +290,139 @@ class BaseCrawler:
 
         print("[SUCCESS] WebDriver setup complete")
 
+    def setup_driver_stealth(self, account_name='Amazon'):
+        """
+        강화된 봇 감지 회피 Chrome WebDriver 설정
+
+        쓰임새:
+        - Main/BSR 크롤러에서 쿠키 없이 크롤링할 때 사용
+        - Amazon의 봇 감지를 회피하기 위한 강화된 설정 적용
+        - navigator.webdriver, plugins, WebGL 등 다양한 속성 위장
+
+        Args:
+            account_name (str): 쇼핑몰명 (Amazon, Bestbuy, Walmart)
+
+        Returns:
+            None
+        """
+        # Amazon만 강화된 봇 감지 회피 적용, 다른 쇼핑몰은 기본 setup_driver 사용
+        if account_name != 'Amazon':
+            self.setup_driver()
+            return
+
+        chrome_options = Options()
+
+        # 기본 옵션
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+
+        # 봇 감지 회피 옵션
+        chrome_options.add_argument('--disable-infobars')
+        chrome_options.add_argument('--disable-extensions')
+        chrome_options.add_argument('--disable-popup-blocking')
+        chrome_options.add_argument('--disable-notifications')
+        chrome_options.add_argument('--ignore-certificate-errors')
+        chrome_options.add_argument('--allow-running-insecure-content')
+
+        # 창 크기 설정 (봇처럼 보이지 않게)
+        chrome_options.add_argument('--window-size=1920,1080')
+        chrome_options.add_argument('--start-maximized')
+
+        # User-Agent 설정 (최신 Chrome 버전)
+        chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')
+
+        # 자동화 흔적 숨기기
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+
+        # 언어 설정
+        chrome_options.add_argument('--lang=en-US')
+        prefs = {
+            'intl.accept_languages': 'en-US,en',
+            'credentials_enable_service': False,
+            'profile.password_manager_enabled': False
+        }
+        chrome_options.add_experimental_option('prefs', prefs)
+
+        service = Service(ChromeDriverManager().install())
+        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+
+        # 페이지 로드 타임아웃 설정 (120초)
+        self.driver.set_page_load_timeout(120)
+
+        # CDP 명령으로 webdriver 속성 및 기타 자동화 흔적 숨기기
+        self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+            'source': '''
+                // webdriver 속성 숨기기
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+
+                // chrome 객체 정상화
+                window.chrome = {
+                    runtime: {},
+                    loadTimes: function() {},
+                    csi: function() {},
+                    app: {}
+                };
+
+                // permissions 쿼리 오버라이드
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+
+                // plugins 배열 정상화 (빈 배열이면 봇으로 탐지됨)
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+
+                // languages 정상화
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+
+                // platform 정상화
+                Object.defineProperty(navigator, 'platform', {
+                    get: () => 'Win32'
+                });
+
+                // hardware concurrency (CPU 코어 수)
+                Object.defineProperty(navigator, 'hardwareConcurrency', {
+                    get: () => 8
+                });
+
+                // device memory
+                Object.defineProperty(navigator, 'deviceMemory', {
+                    get: () => 8
+                });
+
+                // WebGL 벤더/렌더러 정상화
+                const getParameter = WebGLRenderingContext.prototype.getParameter;
+                WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                    if (parameter === 37445) {
+                        return 'Intel Inc.';
+                    }
+                    if (parameter === 37446) {
+                        return 'Intel Iris OpenGL Engine';
+                    }
+                    return getParameter.apply(this, arguments);
+                };
+            '''
+        })
+
+        # User-Agent 클라이언트 힌트 설정
+        self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+            "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            "platform": "Windows",
+            "acceptLanguage": "en-US,en;q=0.9"
+        })
+
+        print("[SUCCESS] WebDriver setup complete (stealth mode)")
+
     def extract_text_safe(self, element, xpath):
         """
         XPath를 사용하여 안전하게 텍스트 추출

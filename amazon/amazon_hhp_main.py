@@ -14,6 +14,7 @@ Amazon Main 페이지 크롤러
 - main_rank는 페이지 관계없이 1부터 순차 증가
 - 테스트 모드: test_count 설정값만큼 수집
 - 운영 모드: max_products 설정값만큼 수집
+- 쿠키로드 안함
 
 ================================================================================
 저장 테이블
@@ -65,8 +66,8 @@ class AmazonMainCrawler(BaseCrawler):
         self.url_template = self.load_page_urls(self.account_name, self.page_type)
         if not self.url_template:
             return False
-        self.setup_driver()
-        self.cookies_loaded = self.load_cookies(self.account_name)
+        self.setup_driver_stealth(self.account_name)  # Amazon만 강화된 봇 감지 회피 적용
+        # Main 크롤러는 쿠키 로드 안함 (순위 변동 방지)
 
         if not self.batch_id:
             self.batch_id = self.generate_batch_id(self.account_name)
@@ -88,11 +89,6 @@ class AmazonMainCrawler(BaseCrawler):
 
             self.driver.get(url)
             time.sleep(30)
-
-            # 첫 페이지 로드 후 쿠키 저장
-            if not self.cookies_loaded and page_number == 1:
-                self.save_cookies(self.account_name)
-                self.cookies_loaded = True
 
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)

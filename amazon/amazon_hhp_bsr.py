@@ -63,8 +63,8 @@ class AmazonBSRCrawler(BaseCrawler):
         self.url_template = self.load_page_urls(self.account_name, self.page_type)
         if not self.url_template:
             return False
-        self.setup_driver()
-        self.cookies_loaded = self.load_cookies(self.account_name)
+        self.setup_driver_stealth(self.account_name)  # Amazon만 강화된 봇 감지 회피 적용
+        # BSR 크롤러는 쿠키 로드 안함 (순위 변동 방지)
 
         if not self.batch_id:
             self.batch_id = self.generate_batch_id(self.account_name)
@@ -86,11 +86,6 @@ class AmazonBSRCrawler(BaseCrawler):
 
             self.driver.get(url)
             time.sleep(30)
-
-            # 첫 페이지 로드 후 쿠키 저장
-            if not self.cookies_loaded and page_number == 1:
-                self.save_cookies(self.account_name)
-                self.cookies_loaded = True
 
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
