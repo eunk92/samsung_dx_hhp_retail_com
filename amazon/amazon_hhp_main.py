@@ -109,7 +109,7 @@ class AmazonMainCrawler(BaseCrawler):
                         'number_of_units_purchased_past_month': self.safe_extract(item, 'number_of_units_purchased_past_month'),
                         'final_sku_price': self.safe_extract(item, 'final_sku_price'),
                         'original_sku_price': self.safe_extract(item, 'original_sku_price'),
-                        'shipping_info': self.safe_extract(item, 'shipping_info'),
+                        'shipping_info': self.safe_extract_join(item, 'shipping_info', separator=", "),
                         'available_quantity_for_purchase': self.safe_extract(item, 'available_quantity_for_purchase'),
                         'discount_type': self.safe_extract(item, 'discount_type'),
                         'main_rank': self.current_rank,

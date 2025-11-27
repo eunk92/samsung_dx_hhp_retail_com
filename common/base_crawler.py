@@ -480,6 +480,52 @@ class BaseCrawler:
             print(f"[WARNING] Failed to extract {field_name}: {e}")
             return None
 
+    def safe_extract_join(self, element, field_name, separator=" / "):
+        """
+        여러 요소를 추출하여 구분자로 결합
+
+        쓰임새:
+        - Union XPath (|)로 여러 요소를 선택하는 경우
+        - 예: shipping_info에서 primary + secondary delivery message를 결합
+        - separator로 결합 구분자 지정 가능
+
+        Args:
+            element: lxml HTML element
+            field_name (str): XPath 필드명 (xpaths 딕셔너리 키)
+            separator (str): 요소 결합 구분자 (기본: " / ")
+
+        Returns:
+            str or None: 결합된 텍스트, 요소 없으면 None
+        """
+        try:
+            xpath = self.xpaths.get(field_name, {}).get('xpath')
+            if not xpath:
+                return None
+
+            elements = element.xpath(xpath)
+            if not elements:
+                return None
+
+            # 각 요소에서 텍스트 추출
+            texts = []
+            for elem in elements:
+                if isinstance(elem, str):
+                    text = elem.strip()
+                else:
+                    text = elem.text_content().strip()
+                if text:
+                    texts.append(text)
+
+            if not texts:
+                return None
+
+            # 요소가 1개면 그대로, 2개 이상이면 구분자로 결합
+            return separator.join(texts) if len(texts) > 1 else texts[0]
+
+        except Exception as e:
+            print(f"[WARNING] Failed to extract_join {field_name}: {e}")
+            return None
+
     def generate_batch_id(self, account_name):
         """
         배치 ID 생성 (쇼핑몰 prefix + 타임스탬프)
