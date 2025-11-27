@@ -165,7 +165,6 @@ class AmazonDetailCrawler(BaseCrawler):
     def extract_trade_in(self, tree):
         """Trade-in 값 추출 (a-offscreen 중복 텍스트 제외)"""
         try:
-            # DB에서 XPath 불러오기
             xpath = self.xpaths.get('trade_in', {}).get('xpath')
             if not xpath:
                 return None
