@@ -56,6 +56,8 @@ class AmazonDetailCrawler(BaseCrawler):
         self.page_type = 'detail'
         self.cookies_loaded = False
         self.login_success = login_success
+        # 테스트 모드: batch_id가 전달되지 않으면 테스트 테이블 사용
+        self.test_mode = batch_id is None
 
     def initialize(self):
         """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
@@ -523,8 +525,11 @@ class AmazonDetailCrawler(BaseCrawler):
             cursor = self.db_conn.cursor()
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-            insert_query = """
-                INSERT INTO hhp_retail_com (
+            # 테스트 모드면 test_hhp_retail_com, 통합 크롤러면 hhp_retail_com
+            table_name = 'test_hhp_retail_com' if self.test_mode else 'hhp_retail_com'
+
+            insert_query = f"""
+                INSERT INTO {table_name} (
                     country, product, item, account_name, page_type,
                     retailer_sku_name, product_url,
                     count_of_reviews, star_rating, count_of_star_ratings,
@@ -653,7 +658,8 @@ class AmazonDetailCrawler(BaseCrawler):
                 saved_count = self.save_to_retail_com(crawled_products)
                 total_saved += saved_count
 
-            print(f"[DONE] Processed: {len(product_list)}, Saved: {total_saved}, batch_id: {self.batch_id}")
+            table_name = 'test_hhp_retail_com' if self.test_mode else 'hhp_retail_com'
+            print(f"[DONE] Processed: {len(product_list)}, Saved: {total_saved}, Table: {table_name}, batch_id: {self.batch_id}")
             return True
 
         except Exception as e:
