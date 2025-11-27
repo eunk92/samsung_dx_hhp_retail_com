@@ -165,20 +165,25 @@ class AmazonDetailCrawler(BaseCrawler):
     def extract_trade_in(self, tree):
         """Trade-in 값 추출 (a-offscreen 중복 텍스트 제외)"""
         try:
+            from copy import deepcopy
+
             xpath = self.xpaths.get('trade_in', {}).get('xpath')
+            print(f"[DEBUG] trade_in xpath: {xpath}")
             if not xpath:
                 return None
 
             container = tree.xpath(xpath)
+            print(f"[DEBUG] trade_in container found: {len(container) if container else 0}")
             if not container:
                 return None
 
-            container = container[0]
+            elem_copy = deepcopy(container[0])
 
-            for offscreen in container.xpath('.//span[@class="a-offscreen"]'):
+            for offscreen in elem_copy.xpath('.//span[@class="a-offscreen"]'):
                 offscreen.getparent().remove(offscreen)
 
-            text = container.text_content().strip()
+            text = elem_copy.text_content().strip()
+            print(f"[DEBUG] trade_in 추출값: {text}")
             return text if text else None
         except Exception as e:
             print(f"[ERROR] Failed to extract trade_in: {e}")

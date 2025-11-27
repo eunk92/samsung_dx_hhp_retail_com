@@ -36,6 +36,11 @@ PRODUCT_URL = ""
 # 테스트할 XPath 목록 (필드명: [xpath 후보들])
 TEST_XPATHS = {
     'trade_in': [
+        # "Trade-in and save" 텍스트 기준으로 찾기
+        '//*[contains(text(), "Trade-in and save")]/following::*[contains(text(), "Save up to")][1]',
+        '//*[contains(text(), "Trade-in and save")]/ancestor::div[1]/following-sibling::div[1]//*[contains(text(), "Save")]',
+        '//*[contains(text(), "Trade-in and save")]/../..//*[contains(text(), "Save up to")]',
+        # 기존 방법
         '//div[@id="NO_INTENT_DOM_RENDER"]//div[@class="utxDynamicLongMessage"]',
         '//div[@id="tradeInOfferViewModel_0"]//div[@class="utxLongMessage"]',
         '//span[contains(text(), "Trade-in and save")]/ancestor::div[contains(@class, "Expander")]//div[@class="utxDynamicLongMessage"]',
