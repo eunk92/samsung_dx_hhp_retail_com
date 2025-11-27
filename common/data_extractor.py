@@ -273,3 +273,42 @@ def _extract_star_ratings_count_generic(tree, xpath, account_name):
     except Exception as e:
         print(f"[WARNING] Failed to extract generic star ratings distribution: {e}")
         return None
+
+
+def extract_text_before_or_after(raw_text, cut_text, position='before'):
+    """
+    특정 텍스트 기준으로 앞 또는 뒤 텍스트 추출
+
+    쓰임새:
+    - Prime 메시지에서 'Join Prime' 이전 텍스트만 추출
+    - 특정 구분자 기준으로 텍스트 분리
+
+    Args:
+        raw_text (str): 원본 텍스트
+        cut_text (str): 자를 기준 텍스트
+        position (str): 'before' (앞) 또는 'after' (뒤)
+
+    Returns:
+        str or None: 추출된 텍스트 또는 None
+
+    Examples:
+        - extract_text_before_or_after("Or Prime members get FREE delivery Saturday. Join Prime", "Join Prime", "before")
+          → "Or Prime members get FREE delivery Saturday."
+        - extract_text_before_or_after("Price: $999 - Details", " - ", "before")
+          → "Price: $999"
+        - extract_text_before_or_after("Category: Electronics", ": ", "after")
+          → "Electronics"
+    """
+    if not raw_text:
+        return None
+
+    if not cut_text or cut_text not in raw_text:
+        return raw_text.strip() if raw_text else None
+
+    if position == 'before':
+        return raw_text.split(cut_text)[0].strip()
+    elif position == 'after':
+        parts = raw_text.split(cut_text, 1)
+        return parts[1].strip() if len(parts) > 1 else None
+    else:
+        return raw_text.strip()

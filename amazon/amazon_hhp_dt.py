@@ -392,7 +392,10 @@ class AmazonDetailCrawler(BaseCrawler):
             hhp_carrier = self.safe_extract(tree, 'hhp_carrier')
             sku_popularity = self.safe_extract(tree, 'sku_popularity')
             bundle = self.safe_extract(tree, 'bundle')
-            retailer_membership_discounts = self.safe_extract(tree, 'retailer_membership_discounts')
+            retailer_membership_discounts_raw = self.safe_extract(tree, 'retailer_membership_discounts')
+            retailer_membership_discounts = data_extractor.extract_text_before_or_after(
+                retailer_membership_discounts_raw, 'Join Prime', 'before'
+            )
 
             # Additional details 버튼 클릭
             hhp_storage = None
