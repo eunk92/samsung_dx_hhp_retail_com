@@ -56,7 +56,7 @@ def extract_numeric_value(text, include_comma=True, include_decimal=True):
 
 
 
-def extract_rating(text, account_name=None):
+def extract_rating(text):
     """
     별점 텍스트에서 숫자 추출 (소수점 포함, 쉼표 제외)
 
@@ -65,24 +65,24 @@ def extract_rating(text, account_name=None):
 
     Args:
         text (str): 원본 텍스트
-        account_name (str, optional): 쇼핑몰 계정명 (None 반환 시 쇼핑몰별 텍스트 사용)
 
     Returns:
-        str: 별점 숫자 또는 쇼핑몰별 리뷰 없음 텍스트
+        str or None: 별점 숫자, 숫자 없으면 원본 text, text가 None이면 None
 
     Examples:
         - "4.5 out of 5 stars" → "4.5"
         - "3.8 out of 5" → "3.8"
-        - "5.0" → "5.0"
-        - None (with account_name="Amazon") → "No customer reviews"
+        - "Not yet reviewed" → "Not yet reviewed"
+        - None → None
     """
     result = extract_numeric_value(text, include_comma=False, include_decimal=True)
-    if result is None and account_name:
-        return get_no_reviews_text(account_name)
-    return result
+    if result:
+        return result
+
+    return text
 
 
-def extract_review_count(text, account_name=None):
+def extract_review_count(text):
     """
     리뷰 개수 텍스트에서 숫자 추출 (쉼표 제거, 소수점 제외)
 
@@ -91,24 +91,21 @@ def extract_review_count(text, account_name=None):
 
     Args:
         text (str): 원본 텍스트
-        account_name (str, optional): 쇼핑몰 계정명 (None 반환 시 쇼핑몰별 텍스트 사용)
 
     Returns:
-        str: 리뷰 개수 (쉼표 제거된 숫자) 또는 쇼핑몰별 리뷰 없음 텍스트
+        str or None: 리뷰 개수 (쉼표 제거된 숫자), 숫자 없으면 원본 text, text가 None이면 None
 
     Examples:
         - "3,572등급 글로벌 평점" → "3572"
         - "1234 reviews" → "1234"
-        - "891 reviews" → "891"
-        - None (with account_name="Amazon") → "No customer reviews"
+        - "Not yet reviewed" → "Not yet reviewed"
+        - None → None
     """
     result = extract_numeric_value(text, include_comma=True, include_decimal=False)
     if result:
-        # 쉼표 제거하여 순수 숫자로 반환
-        result = result.replace(',', '')
-    elif account_name:
-        return get_no_reviews_text(account_name)
-    return result
+        return result.replace(',', '')
+
+    return text
 
 
 def get_no_reviews_text(account_name):
