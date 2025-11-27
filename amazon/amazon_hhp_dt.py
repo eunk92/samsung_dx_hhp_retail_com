@@ -67,6 +67,12 @@ class AmazonDetailCrawler(BaseCrawler):
         if not self.load_xpaths(self.account_name, self.page_type):
             return False
 
+        # [DEBUG] 로드된 xpaths 확인
+        print(f"[DEBUG] Loaded xpaths keys: {list(self.xpaths.keys())}")
+        print(f"[DEBUG] trade_in in xpaths: {'trade_in' in self.xpaths}")
+        if 'trade_in' in self.xpaths:
+            print(f"[DEBUG] trade_in value: {self.xpaths['trade_in']}")
+
         self.setup_driver()
 
         if self.login_success is False:
@@ -168,12 +174,10 @@ class AmazonDetailCrawler(BaseCrawler):
             from copy import deepcopy
 
             xpath = self.xpaths.get('trade_in', {}).get('xpath')
-            print(f"[DEBUG] trade_in xpath: {xpath}")
             if not xpath:
                 return None
 
             container = tree.xpath(xpath)
-            print(f"[DEBUG] trade_in container found: {len(container) if container else 0}")
             if not container:
                 return None
 
@@ -183,7 +187,6 @@ class AmazonDetailCrawler(BaseCrawler):
                 offscreen.getparent().remove(offscreen)
 
             text = elem_copy.text_content().strip()
-            print(f"[DEBUG] trade_in 추출값: {text}")
             return text if text else None
         except Exception as e:
             print(f"[ERROR] Failed to extract trade_in: {e}")
@@ -400,7 +403,7 @@ class AmazonDetailCrawler(BaseCrawler):
             if 'robot' in page_html.lower() or 'captcha' in page_html.lower():
                 if self.handle_captcha():
                     self.driver.get(product_url)
-                    time.sleep(5)
+                    time.sleep(10)  # CAPTCHA 후 재로드 시에도 충분히 대기
                     page_html = self.driver.page_source
                     tree = html.fromstring(page_html)
                 else:
@@ -411,6 +414,9 @@ class AmazonDetailCrawler(BaseCrawler):
             product_type = 'HHP'
             item = self.extract_asin_from_url(product_url)
 
+            # Trade-in 섹션은 JS로 늦게 로드될 수 있으므로 최신 HTML로 재파싱
+            page_html = self.driver.page_source
+            tree = html.fromstring(page_html)
             trade_in = self.extract_trade_in(tree)
             hhp_carrier = self.extract_with_fallback(tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
             sku_popularity = self.extract_with_fallback(tree, self.xpaths.get('sku_popularity', {}).get('xpath'))

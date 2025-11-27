@@ -36,15 +36,24 @@ PRODUCT_URL = ""
 # 테스트할 XPath 목록 (필드명: [xpath 후보들])
 TEST_XPATHS = {
     'trade_in': [
-        # "Trade-in and save" 텍스트 기준으로 찾기
-        '//*[contains(text(), "Trade-in and save")]/following::*[contains(text(), "Save up to")][1]',
-        '//*[contains(text(), "Trade-in and save")]/ancestor::div[1]/following-sibling::div[1]//*[contains(text(), "Save")]',
-        '//*[contains(text(), "Trade-in and save")]/../..//*[contains(text(), "Save up to")]',
-        # 기존 방법
+        # 비로그인용 (기존)
         '//div[@id="NO_INTENT_DOM_RENDER"]//div[@class="utxDynamicLongMessage"]',
         '//div[@id="tradeInOfferViewModel_0"]//div[@class="utxLongMessage"]',
         '//span[contains(text(), "Trade-in and save")]/ancestor::div[contains(@class, "Expander")]//div[@class="utxDynamicLongMessage"]',
         '//div[contains(@class, "unifiedTradeInIngress")]//div[@class="utxDynamicLongMessage"]',
+        # 로그인용 (새로 추가)
+        '//*[contains(text(), "Trade-in and save")]/following::span[contains(@class, "a-price")][1]',
+        '//*[contains(text(), "Trade-in and save")]/following::*[contains(@class, "a-price")][1]',
+        '//*[contains(text(), "Trade-in and save")]/ancestor::div//span[contains(@class, "a-price")]',
+        '//*[contains(text(), "Trade-in")]/ancestor::div[contains(@class, "trade")]//span[contains(text(), "$")]',
+        '//*[contains(text(), "Save up to")]/ancestor::div[1]',
+        '//*[contains(text(), "Trade-in and save")]/following::div[contains(@class, "trade")][1]',
+        # Trade-in and save 기준 - 더 넓은 범위
+        '//*[contains(text(), "Trade-in and save")]/ancestor::div[contains(@class, "a-section")][1]',
+        '//*[contains(text(), "Trade-in and save")]/ancestor::div[2]',
+        '//*[contains(text(), "Trade-in and save")]/ancestor::div[3]',
+        '//*[contains(text(), "Trade-in and save")]/parent::*/parent::*',
+        '//*[contains(text(), "Trade-in and save")]/following-sibling::div[1]',
     ],
     # 다른 필드 추가 가능
     # 'hhp_carrier': [
@@ -87,6 +96,33 @@ class XPathTester:
         })
         print("[INFO] Chrome 드라이버 설정 완료")
 
+    def load_cookies(self):
+        """크롤러와 동일한 쿠키 로드"""
+        import pickle
+        cookie_file = os.path.join(os.path.dirname(__file__), '..', 'cookies', 'amazon_cookies.pkl')
+        if os.path.exists(cookie_file):
+            try:
+                # 먼저 Amazon 도메인 접속
+                self.driver.get("https://www.amazon.com")
+                import time
+                time.sleep(2)
+
+                with open(cookie_file, 'rb') as f:
+                    cookies = pickle.load(f)
+                for cookie in cookies:
+                    try:
+                        self.driver.add_cookie(cookie)
+                    except:
+                        pass
+                print("[INFO] 쿠키 로드 완료")
+                return True
+            except Exception as e:
+                print(f"[WARNING] 쿠키 로드 실패: {e}")
+                return False
+        else:
+            print("[INFO] 쿠키 파일 없음 - 비로그인 상태로 테스트")
+            return False
+
     def load_page(self, url):
         """페이지 로드"""
         print(f"[INFO] 페이지 로딩: {url}")
@@ -108,18 +144,22 @@ class XPathTester:
 
     def test_xpaths(self, tree, field_name, xpath_list):
         """XPath 목록 테스트"""
-        print(f"\n{'='*60}")
+        print(f"\n{'='*80}")
         print(f"필드: {field_name}")
-        print('='*60)
+        print('='*80)
 
         for i, xpath in enumerate(xpath_list, 1):
             print(f"\n[{i}] XPath: {xpath}")
             try:
                 elements = tree.xpath(xpath)
                 if elements:
-                    text = self.extract_text(elements[0])
                     print(f"    ✓ 성공! 요소 {len(elements)}개 발견")
-                    print(f"    추출값: {text}")
+                    # 모든 요소의 전체 텍스트 출력
+                    for j, elem in enumerate(elements):
+                        text = self.extract_text(elem)
+                        print(f"\n    --- 요소 {j+1} 전체 텍스트 ---")
+                        print(f"    {text}")
+                        print(f"    --- 끝 (길이: {len(text)}자) ---")
                 else:
                     print(f"    ✗ 실패 - 요소 없음")
             except Exception as e:
@@ -133,8 +173,15 @@ class XPathTester:
             print("URL이 입력되지 않아 프로그램을 종료합니다.")
             return
 
+        # 쿠키 사용 여부
+        use_cookies = input("쿠키 로드할까요? (y/n, 기본값=n): ").strip().lower() == 'y'
+
         try:
             self.setup_driver()
+
+            if use_cookies:
+                self.load_cookies()
+
             tree = self.load_page(url)
 
             print("\n" + "="*60)
