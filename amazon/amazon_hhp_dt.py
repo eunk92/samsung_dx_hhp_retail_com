@@ -60,7 +60,7 @@ class AmazonDetailCrawler(BaseCrawler):
     def initialize(self):
         """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
         if not self.batch_id:
-            self.batch_id = 'a_20251125_212207'
+            self.batch_id = 'a_20251126_151351'
 
         if not self.connect_db():
             return False
@@ -161,6 +161,30 @@ class AmazonDetailCrawler(BaseCrawler):
             print(f"[ERROR] Failed to load product list: {e}")
             traceback.print_exc()
             return []
+
+    def extract_trade_in(self, tree):
+        """Trade-in 값 추출 (a-offscreen 중복 텍스트 제외)"""
+        try:
+            # DB에서 XPath 불러오기
+            xpath = self.xpaths.get('trade_in', {}).get('xpath')
+            if not xpath:
+                return None
+
+            container = tree.xpath(xpath)
+            if not container:
+                return None
+
+            container = container[0]
+
+            for offscreen in container.xpath('.//span[@class="a-offscreen"]'):
+                offscreen.getparent().remove(offscreen)
+
+            text = container.text_content().strip()
+            return text if text else None
+        except Exception as e:
+            print(f"[ERROR] Failed to extract trade_in: {e}")
+            traceback.print_exc()
+            return None
 
     def extract_asin_from_url(self, product_url):
         """URL에서 ASIN 추출"""
@@ -272,7 +296,7 @@ class AmazonDetailCrawler(BaseCrawler):
         except Exception as e:
             print(f"[ERROR] Review extraction failed: {e}")
             traceback.print_exc()
-            return data_extractor.get_no_reviews_text(self.account_name)
+            return None
 
     def extract_reviews_from_review_page(self, item, max_reviews=20):
         """리뷰 페이지에서 리뷰 추출 (현재 미사용, 향후 변경 대비)"""
@@ -290,7 +314,7 @@ class AmazonDetailCrawler(BaseCrawler):
 
             page_html_lower = page_html.lower()
             if "couldn't find that page" in page_html_lower or "page not found" in page_html_lower:
-                return data_extractor.get_no_reviews_text(self.account_name)
+                return None
 
             current_url = self.driver.current_url
             if 'signin' in current_url or 'ap/signin' in current_url:
@@ -383,7 +407,7 @@ class AmazonDetailCrawler(BaseCrawler):
             product_type = 'HHP'
             item = self.extract_asin_from_url(product_url)
 
-            trade_in = self.extract_with_fallback(tree, self.xpaths.get('trade_in', {}).get('xpath'))
+            trade_in = self.extract_trade_in(tree)
             hhp_carrier = self.extract_with_fallback(tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
             sku_popularity = self.extract_with_fallback(tree, self.xpaths.get('sku_popularity', {}).get('xpath'))
             bundle = self.extract_with_fallback(tree, self.xpaths.get('bundle', {}).get('xpath'))
