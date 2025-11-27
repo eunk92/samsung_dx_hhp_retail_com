@@ -102,6 +102,7 @@ class BestBuyBSRCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Scroll failed: {e}")
+            traceback.print_exc()
 
     def crawl_page(self, page_number):
         """페이지 크롤링: 페이지 로드 → 페이지네이션까지 스크롤 → HTML 파싱(최대 3회) → 제품 데이터 추출"""
@@ -166,6 +167,7 @@ class BestBuyBSRCrawler(BaseCrawler):
 
                 except Exception as e:
                     print(f"[ERROR] Product {idx} extract failed: {e}")
+                    traceback.print_exc()
                     continue
 
             print(f"[INFO] Page {page_number}: {len(products)} products")
@@ -173,6 +175,7 @@ class BestBuyBSRCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Page {page_number} failed: {e}")
+            traceback.print_exc()
             return []
 
     def save_products(self, products):
@@ -291,7 +294,7 @@ class BestBuyBSRCrawler(BaseCrawler):
                                         self.db_conn.commit()
                                         insert_count += 1
                                     except Exception as single_error:
-                                        print(f"[ERROR] DB save failed: {single_product.get('retailer_sku_name', 'N/A')[:30]}: {single_error}")
+                                        print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
                                         traceback.print_exc()
                                         self.db_conn.rollback()
 
@@ -341,6 +344,7 @@ class BestBuyBSRCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Crawler failed: {e}")
+            traceback.print_exc()
             return False
 
         finally:

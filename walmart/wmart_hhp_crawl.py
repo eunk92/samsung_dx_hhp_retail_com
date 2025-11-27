@@ -35,6 +35,7 @@ python wmart_hhp_crawl.py --resume-from bsr --batch-id w_20250123_143045
 import sys
 import os
 import argparse
+import traceback
 from datetime import datetime
 
 # 공통 환경 설정 (작업 디렉토리, 한글 출력, 경로 설정)
@@ -94,6 +95,7 @@ class WalmartIntegratedCrawler:
                     crawl_results['main'] = WalmartMainCrawler(test_mode=False, batch_id=self.batch_id).run()
                 except Exception as e:
                     print(f"[ERROR] Main: {e}")
+                    traceback.print_exc()
                     crawl_results['main'] = False
             else:
                 crawl_results['main'] = 'skipped'
@@ -105,6 +107,7 @@ class WalmartIntegratedCrawler:
                     crawl_results['bsr'] = WalmartBSRCrawler(test_mode=False, batch_id=self.batch_id).run()
                 except Exception as e:
                     print(f"[ERROR] BSR: {e}")
+                    traceback.print_exc()
                     crawl_results['bsr'] = False
             else:
                 crawl_results['bsr'] = 'skipped'
@@ -115,6 +118,7 @@ class WalmartIntegratedCrawler:
                 crawl_results['detail'] = WalmartDetailCrawler(batch_id=self.batch_id).run()
             except Exception as e:
                 print(f"[ERROR] Detail: {e}")
+                traceback.print_exc()
                 crawl_results['detail'] = False
 
             # 결과 출력
@@ -136,7 +140,6 @@ class WalmartIntegratedCrawler:
 
         except Exception as e:
             print(f"\n[ERROR] Integrated crawler failed: {e}")
-            import traceback
             traceback.print_exc()
             # 예외 발생 시에도 로깅 종료
             self.base_crawler.stop_logging()

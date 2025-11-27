@@ -98,6 +98,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to setup Playwright: {e}")
+            traceback.print_exc()
             return False
 
     def handle_captcha(self):
@@ -229,6 +230,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to load product list: {e}")
+            traceback.print_exc()
             return []
 
     def crawl_detail(self, product, first_product=False):
@@ -541,6 +543,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to crawl detail page: {e}")
+            traceback.print_exc()
             return product
 
     def save_to_retail_com(self, products):
@@ -626,7 +629,7 @@ class WalmartDetailCrawler(BaseCrawler):
                             self.db_conn.commit()
                             total_saved += 1
                         except Exception as single_error:
-                            print(f"[ERROR] DB save failed: {single_product.get('retailer_sku_name', 'N/A')[:30]}: {single_error}")
+                            print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
                             traceback.print_exc()
                             self.db_conn.rollback()
 
@@ -655,7 +658,7 @@ class WalmartDetailCrawler(BaseCrawler):
             total_saved = 0
 
             for i, product in enumerate(product_list, 1):
-                sku_name = product.get('retailer_sku_name', 'N/A')
+                sku_name = product.get('retailer_sku_name') or 'N/A'
                 print(f"[{i}/{len(product_list)}] {sku_name[:50]}...")
 
                 first_product = (i == 1)

@@ -56,7 +56,7 @@ class BestBuyDetailCrawler(BaseCrawler):
     def initialize(self):
         """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
         if not self.batch_id:
-            self.batch_id = 'b_20251126_025003'
+            self.batch_id = 'b_20251126_151831'
 
         if not self.connect_db():
             return False
@@ -496,7 +496,7 @@ class BestBuyDetailCrawler(BaseCrawler):
             SAVE_BATCH_SIZE = 5
 
             for i, product in enumerate(product_list, 1):
-                sku_name = product.get('retailer_sku_name', 'N/A')
+                sku_name = product.get('retailer_sku_name') or 'N/A'
                 print(f"[{i}/{len(product_list)}] {sku_name[:50]}...")
 
                 combined_data = self.crawl_detail(product)

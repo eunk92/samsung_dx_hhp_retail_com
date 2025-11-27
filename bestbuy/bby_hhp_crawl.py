@@ -36,6 +36,7 @@ python bby_hhp_crawl.py --resume-from trend --batch-id b_20250123_143045
 import sys
 import os
 import argparse
+import traceback
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -95,6 +96,7 @@ class BestBuyIntegratedCrawler:
                     crawl_results['main'] = BestBuyMainCrawler(test_mode=False, batch_id=self.batch_id).run()
                 except Exception as e:
                     print(f"[ERROR] Main: {e}")
+                    traceback.print_exc()
                     crawl_results['main'] = False
             else:
                 crawl_results['main'] = 'skipped'
@@ -106,6 +108,7 @@ class BestBuyIntegratedCrawler:
                     crawl_results['bsr'] = BestBuyBSRCrawler(test_mode=False, batch_id=self.batch_id).run()
                 except Exception as e:
                     print(f"[ERROR] BSR: {e}")
+                    traceback.print_exc()
                     crawl_results['bsr'] = False
             else:
                 crawl_results['bsr'] = 'skipped'
@@ -117,6 +120,7 @@ class BestBuyIntegratedCrawler:
                     crawl_results['trend'] = BestBuyTrendCrawler(test_mode=False, batch_id=self.batch_id).run()
                 except Exception as e:
                     print(f"[ERROR] Trend: {e}")
+                    traceback.print_exc()
                     crawl_results['trend'] = False
             else:
                 crawl_results['trend'] = 'skipped'
@@ -127,6 +131,7 @@ class BestBuyIntegratedCrawler:
                 crawl_results['detail'] = BestBuyDetailCrawler(batch_id=self.batch_id).run()
             except Exception as e:
                 print(f"[ERROR] Detail: {e}")
+                traceback.print_exc()
                 crawl_results['detail'] = False
 
             # 결과 출력
@@ -148,7 +153,6 @@ class BestBuyIntegratedCrawler:
 
         except Exception as e:
             print(f"\n[ERROR] Integrated crawler failed: {e}")
-            import traceback
             traceback.print_exc()
             # 예외 발생 시에도 로깅 종료
             self.base_crawler.stop_logging()

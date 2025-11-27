@@ -127,6 +127,7 @@ class BestBuyTrendCrawler(BaseCrawler):
 
                 except Exception as e:
                     print(f"[ERROR] Product {idx} extract failed: {e}")
+                    traceback.print_exc()
                     continue
 
             print(f"[INFO] Trend page: {len(products)} products")
@@ -134,6 +135,7 @@ class BestBuyTrendCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Trend page failed: {e}")
+            traceback.print_exc()
             return []
 
     def save_products(self, products):
@@ -242,7 +244,7 @@ class BestBuyTrendCrawler(BaseCrawler):
                                         self.db_conn.commit()
                                         insert_count += 1
                                     except Exception as single_error:
-                                        print(f"[ERROR] DB save failed: {single_product.get('retailer_sku_name', 'N/A')[:30]}: {single_error}")
+                                        print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
                                         self.db_conn.rollback()
 
             cursor.close()
@@ -250,6 +252,7 @@ class BestBuyTrendCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to save products: {e}")
+            traceback.print_exc()
             return 0
 
     def run(self):
@@ -273,6 +276,7 @@ class BestBuyTrendCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Crawler failed: {e}")
+            traceback.print_exc()
             return False
 
         finally:

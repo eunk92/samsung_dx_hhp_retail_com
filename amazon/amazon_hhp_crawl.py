@@ -38,6 +38,7 @@ import sys
 import os
 import argparse
 import subprocess
+import traceback
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -102,6 +103,7 @@ class AmazonIntegratedCrawler:
             return False
         except Exception as e:
             print(f"[ERROR] Login script execution failed: {e}")
+            traceback.print_exc()
             return False
 
     def run(self):
@@ -134,6 +136,7 @@ class AmazonIntegratedCrawler:
                     crawl_results['main'] = AmazonMainCrawler(test_mode=False, batch_id=self.batch_id).run()
                 except Exception as e:
                     print(f"[ERROR] Main: {e}")
+                    traceback.print_exc()
                     crawl_results['main'] = False
             else:
                 crawl_results['main'] = 'skipped'
@@ -145,6 +148,7 @@ class AmazonIntegratedCrawler:
                     crawl_results['bsr'] = AmazonBSRCrawler(test_mode=False, batch_id=self.batch_id).run()
                 except Exception as e:
                     print(f"[ERROR] BSR: {e}")
+                    traceback.print_exc()
                     crawl_results['bsr'] = False
             else:
                 crawl_results['bsr'] = 'skipped'
@@ -157,6 +161,7 @@ class AmazonIntegratedCrawler:
                     crawl_results['login'] = self.login_success
                 except Exception as e:
                     print(f"[ERROR] Login: {e}")
+                    traceback.print_exc()
                     crawl_results['login'] = False
             else:
                 crawl_results['login'] = 'skipped'
@@ -168,6 +173,7 @@ class AmazonIntegratedCrawler:
                 crawl_results['detail'] = AmazonDetailCrawler(batch_id=self.batch_id, login_success=self.login_success).run()
             except Exception as e:
                 print(f"[ERROR] Detail: {e}")
+                traceback.print_exc()
                 crawl_results['detail'] = False
 
             # 결과 출력
@@ -189,7 +195,6 @@ class AmazonIntegratedCrawler:
 
         except Exception as e:
             print(f"\n[ERROR] Integrated crawler failed: {e}")
-            import traceback
             traceback.print_exc()
             # 예외 발생 시에도 로깅 종료
             self.base_crawler.stop_logging()

@@ -145,6 +145,7 @@ class WalmartBSRCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to setup Playwright: {e}")
+            traceback.print_exc()
             return False
 
     def handle_captcha(self):
@@ -302,6 +303,7 @@ class WalmartBSRCrawler(BaseCrawler):
 
                 except Exception as e:
                     print(f"[ERROR] Product {idx} extract failed: {e}")
+                    traceback.print_exc()
                     continue
 
             print(f"[INFO] Page {page_number}: {len(products)} products")
@@ -309,6 +311,7 @@ class WalmartBSRCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Page {page_number} failed: {e}")
+            traceback.print_exc()
             return []
 
     def save_products(self, products):
@@ -430,7 +433,7 @@ class WalmartBSRCrawler(BaseCrawler):
                                         self.db_conn.commit()
                                         insert_count += 1
                                     except Exception as single_error:
-                                        print(f"[ERROR] DB save failed: {single_product.get('retailer_sku_name', 'N/A')[:30]}: {single_error}")
+                                        print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
                                         traceback.print_exc()
                                         self.db_conn.rollback()
 
@@ -480,6 +483,7 @@ class WalmartBSRCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Crawler failed: {e}")
+            traceback.print_exc()
             return False
 
         finally:

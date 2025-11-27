@@ -111,6 +111,7 @@ class AmazonDetailCrawler(BaseCrawler):
             return False
         except Exception as e:
             print(f"[ERROR] Login failed: {e}")
+            traceback.print_exc()
             return False
 
     def load_product_list(self):
@@ -158,6 +159,7 @@ class AmazonDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Failed to load product list: {e}")
+            traceback.print_exc()
             return []
 
     def extract_asin_from_url(self, product_url):
@@ -236,6 +238,7 @@ class AmazonDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] CAPTCHA handling failed: {e}")
+            traceback.print_exc()
             return False
 
     def extract_reviews_from_detail_page(self, tree, max_reviews=10):
@@ -268,6 +271,7 @@ class AmazonDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Review extraction failed: {e}")
+            traceback.print_exc()
             return data_extractor.get_no_reviews_text(self.account_name)
 
     def extract_reviews_from_review_page(self, item, max_reviews=20):
@@ -344,6 +348,7 @@ class AmazonDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Review page extraction failed: {e}")
+            traceback.print_exc()
             return None
 
     def crawl_detail(self, product):
@@ -503,6 +508,7 @@ class AmazonDetailCrawler(BaseCrawler):
 
         except Exception as e:
             print(f"[ERROR] Detail crawl failed: {e}")
+            traceback.print_exc()
             return product
 
     def save_to_retail_com(self, products):
@@ -624,7 +630,7 @@ class AmazonDetailCrawler(BaseCrawler):
             SAVE_BATCH_SIZE = 5
 
             for i, product in enumerate(product_list, 1):
-                sku_name = product.get('retailer_sku_name', 'N/A')
+                sku_name = product.get('retailer_sku_name') or 'N/A'
 
                 combined_data = self.crawl_detail(product)
                 crawled_products.append(combined_data)

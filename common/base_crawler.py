@@ -9,6 +9,7 @@ import glob
 import os
 import sys
 import pickle
+import traceback
 from datetime import datetime, timedelta
 import pytz
 from selenium import webdriver
@@ -156,6 +157,7 @@ class BaseCrawler:
             return True
         except Exception as e:
             print(f"[ERROR] Database connection failed: {e}")
+            traceback.print_exc()
             return False
 
     def load_xpaths(self, account_name, page_type):
@@ -194,6 +196,7 @@ class BaseCrawler:
 
         except Exception as e:
             print(f"[ERROR] Failed to load XPaths: {e}")
+            traceback.print_exc()
             return False
 
     def load_page_urls(self, account_name, page_type):
@@ -231,6 +234,7 @@ class BaseCrawler:
 
         except Exception as e:
             print(f"[ERROR] Failed to load page URLs: {e}")
+            traceback.print_exc()
             return None
 
     def setup_driver(self):
@@ -583,6 +587,7 @@ class BaseCrawler:
 
         except Exception as e:
             print(f"[ERROR] Failed to check product existence: {e}")
+            traceback.print_exc()
             return False
 
     def update_product_rank(self, account_name, batch_id, product_url, rank_type, rank_value, additional_fields=None):
@@ -645,6 +650,7 @@ class BaseCrawler:
 
         except Exception as e:
             print(f"[ERROR] Failed to update product rank: {e}")
+            traceback.print_exc()
             return False
 
     def retry_on_network_error(self, func, max_retries=3, delay=5):
