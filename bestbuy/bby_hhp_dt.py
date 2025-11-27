@@ -163,7 +163,7 @@ class BestBuyDetailCrawler(BaseCrawler):
             item = self.extract_item_from_url(product_url)
 
             # ========== 1단계: 스크롤 전 추출 필드 ==========
-            trade_in = self.extract_with_fallback(tree, self.xpaths.get('trade_in', {}).get('xpath'))
+            trade_in = self.safe_extract(tree, 'trade_in')
 
             # ========== 2단계: HHP 스펙 추출 (specs_button 클릭 후 모달에서 추출) ==========
             hhp_carrier = None
@@ -213,9 +213,9 @@ class BestBuyDetailCrawler(BaseCrawler):
                         modal_html = self.driver.page_source
                         modal_tree = html.fromstring(modal_html)
 
-                        hhp_carrier = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
-                        hhp_storage = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
-                        hhp_color = self.extract_with_fallback(modal_tree, self.xpaths.get('hhp_color', {}).get('xpath'))
+                        hhp_carrier = self.safe_extract(modal_tree, 'hhp_carrier')
+                        hhp_storage = self.safe_extract(modal_tree, 'hhp_storage')
+                        hhp_color = self.safe_extract(modal_tree, 'hhp_color')
 
                         # 스펙 모달창 닫기
                         try:
@@ -289,10 +289,10 @@ class BestBuyDetailCrawler(BaseCrawler):
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
 
-            count_of_reviews_raw = self.extract_with_fallback(tree, self.xpaths.get('count_of_reviews', {}).get('xpath'))
+            count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
             count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw, self.account_name)
 
-            star_rating_raw = self.extract_with_fallback(tree, self.xpaths.get('star_rating', {}).get('xpath'))
+            star_rating_raw = self.safe_extract(tree, 'star_rating')
             star_rating = data_extractor.extract_rating(star_rating_raw, self.account_name)
 
             count_of_star_ratings = data_extractor.extract_star_ratings_count(
@@ -302,8 +302,8 @@ class BestBuyDetailCrawler(BaseCrawler):
                 self.account_name
             )
 
-            top_mentions = self.extract_with_fallback(tree, self.xpaths.get('top_mentions', {}).get('xpath'))
-            recommendation_intent_raw = self.extract_with_fallback(tree, self.xpaths.get('recommendation_intent', {}).get('xpath'))
+            top_mentions = self.safe_extract(tree, 'top_mentions')
+            recommendation_intent_raw = self.safe_extract(tree, 'recommendation_intent')
             recommendation_intent = (recommendation_intent_raw + " would recommend to a friend") if recommendation_intent_raw else None
 
             # ========== 5단계: 리뷰 더보기 버튼 클릭 및 상세 리뷰 추출 ==========
