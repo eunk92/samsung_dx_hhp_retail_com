@@ -51,6 +51,8 @@ class WalmartDetailCrawler(BaseCrawler):
         self.account_name = 'Walmart'
         self.page_type = 'detail'
         self.batch_id = batch_id
+        # 테스트 모드: batch_id가 전달되지 않으면 테스트 테이블 사용
+        self.test_mode = batch_id is None
 
         # Playwright 객체
         self.playwright = None
@@ -555,8 +557,11 @@ class WalmartDetailCrawler(BaseCrawler):
             cursor = self.db_conn.cursor()
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-            insert_query = """
-                INSERT INTO hhp_retail_com (
+            # 테스트 모드면 test_hhp_retail_com, 통합 크롤러면 hhp_retail_com
+            table_name = 'test_hhp_retail_com' if self.test_mode else 'hhp_retail_com'
+
+            insert_query = f"""
+                INSERT INTO {table_name} (
                     country, product, item, account_name, page_type,
                     count_of_reviews, retailer_sku_name, product_url,
                     star_rating, count_of_star_ratings,
@@ -669,7 +674,8 @@ class WalmartDetailCrawler(BaseCrawler):
 
                 time.sleep(random.uniform(3, 5))
 
-            print(f"[DONE] Total: {len(product_list)}, Saved: {total_saved}, batch_id: {self.batch_id}")
+            table_name = 'test_hhp_retail_com' if self.test_mode else 'hhp_retail_com'
+            print(f"[DONE] Total: {len(product_list)}, Saved: {total_saved}, Table: {table_name}, batch_id: {self.batch_id}")
             return True
 
         except Exception as e:
