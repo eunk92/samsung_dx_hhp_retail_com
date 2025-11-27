@@ -641,21 +641,28 @@ class AmazonDetailCrawler(BaseCrawler):
             SAVE_BATCH_SIZE = 5
 
             for i, product in enumerate(product_list, 1):
-                sku_name = product.get('retailer_sku_name') or 'N/A'
+                try:
+                    sku_name = product.get('retailer_sku_name') or 'N/A'
+                    print(f"[{i}/{len(product_list)}] {sku_name[:50]}...")
 
-                combined_data = self.crawl_detail(product)
-                crawled_products.append(combined_data)
+                    combined_data = self.crawl_detail(product)
+                    if combined_data:
+                        crawled_products.append(combined_data)
 
-                if not self.cookies_loaded and i == 1:
-                    self.save_cookies(self.account_name)
-                    self.cookies_loaded = True
+                    if not self.cookies_loaded and i == 1:
+                        self.save_cookies(self.account_name)
+                        self.cookies_loaded = True
 
-                if len(crawled_products) >= SAVE_BATCH_SIZE:
-                    saved_count = self.save_to_retail_com(crawled_products)
-                    total_saved += saved_count
-                    crawled_products = []
+                    if len(crawled_products) >= SAVE_BATCH_SIZE:
+                        saved_count = self.save_to_retail_com(crawled_products)
+                        total_saved += saved_count
+                        crawled_products = []
 
-                time.sleep(5)
+                    time.sleep(5)
+
+                except Exception as e:
+                    print(f"[ERROR] Product {i} failed: {e}")
+                    continue
 
             if crawled_products:
                 saved_count = self.save_to_retail_com(crawled_products)

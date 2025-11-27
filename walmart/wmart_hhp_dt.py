@@ -663,16 +663,22 @@ class WalmartDetailCrawler(BaseCrawler):
             total_saved = 0
 
             for i, product in enumerate(product_list, 1):
-                sku_name = product.get('retailer_sku_name') or 'N/A'
-                print(f"[{i}/{len(product_list)}] {sku_name[:50]}...")
+                try:
+                    sku_name = product.get('retailer_sku_name') or 'N/A'
+                    print(f"[{i}/{len(product_list)}] {sku_name[:50]}...")
 
-                first_product = (i == 1)
-                combined_data = self.crawl_detail(product, first_product=first_product)
+                    first_product = (i == 1)
+                    combined_data = self.crawl_detail(product, first_product=first_product)
 
-                saved_count = self.save_to_retail_com([combined_data])
-                total_saved += saved_count
+                    if combined_data:
+                        saved_count = self.save_to_retail_com([combined_data])
+                        total_saved += saved_count
 
-                time.sleep(random.uniform(3, 5))
+                    time.sleep(random.uniform(3, 5))
+
+                except Exception as e:
+                    print(f"[ERROR] Product {i} failed: {e}")
+                    continue
 
             table_name = 'test_hhp_retail_com' if self.test_mode else 'hhp_retail_com'
             print(f"[DONE] Total: {len(product_list)}, Saved: {total_saved}, Table: {table_name}, batch_id: {self.batch_id}")
