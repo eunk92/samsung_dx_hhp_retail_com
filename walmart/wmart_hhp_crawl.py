@@ -74,7 +74,7 @@ class WalmartIntegratedCrawler:
             self.batch_id = self.base_crawler.generate_batch_id(self.account_name)
 
         # 로깅 시작 (콘솔 출력을 파일에도 저장)
-        log_file = self.base_crawler.start_logging(self.account_name, self.batch_id)
+        log_file = self.base_crawler.start_logging(self.batch_id)
 
         print("\n" + "="*60)
         print("Walmart Integrated Crawler (Production)")

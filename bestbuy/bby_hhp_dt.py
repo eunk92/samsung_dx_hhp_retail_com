@@ -55,6 +55,9 @@ class BestBuyDetailCrawler(BaseCrawler):
 
     def initialize(self):
         """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
+        # 개별 실행 시 (batch_id 없음) 로그 저장 시작
+        self.is_standalone = self.batch_id is None
+
         if not self.batch_id:
             self.batch_id = 'b_20251126_151831'
 
@@ -64,6 +67,13 @@ class BestBuyDetailCrawler(BaseCrawler):
             return False
 
         self.setup_driver()
+
+        # 개별 실행 시 로그 저장 시작
+        if self.is_standalone:
+            log_file = self.start_logging(self.batch_id)
+            if log_file:
+                print(f"[INFO] Log file: {log_file}")
+
         self.cleanup_old_logs()
 
         return True
@@ -522,6 +532,9 @@ class BestBuyDetailCrawler(BaseCrawler):
             return False
 
         finally:
+            # 개별 실행 시 로그 저장 종료
+            if self.is_standalone:
+                self.stop_logging()
             if self.driver:
                 self.driver.quit()
             if self.db_conn:

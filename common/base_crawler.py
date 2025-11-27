@@ -81,7 +81,7 @@ class BaseCrawler:
         self.original_stdout = None
         self.original_stderr = None
 
-    def start_logging(self, account_name, batch_id):
+    def start_logging(self, batch_id):
         """
         콘솔 출력을 파일에도 저장하기 시작
 
@@ -90,7 +90,6 @@ class BaseCrawler:
         - 이후 모든 print() 출력이 콘솔과 파일 양쪽에 기록됨
 
         Args:
-            account_name (str): 쇼핑몰명 (Amazon, Bestbuy, Walmart)
             batch_id (str): 배치 ID
 
         Returns:
@@ -102,9 +101,9 @@ class BaseCrawler:
             logs_dir = os.path.join(project_root, 'logs')
             os.makedirs(logs_dir, exist_ok=True)
 
-            # 로그 파일명: {쇼핑몰명}_{batch_id}.txt
-            shop_folder = account_name.lower()
-            log_file_path = os.path.join(logs_dir, f"{shop_folder}_{batch_id}.txt")
+            # 로그 파일명: {batch_id}_{생성시간}.txt
+            timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+            log_file_path = os.path.join(logs_dir, f"{batch_id}_{timestamp}.txt")
 
             # TeeLogger 시작 (stdout + stderr)
             self.original_stdout = sys.stdout
