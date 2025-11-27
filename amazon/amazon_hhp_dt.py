@@ -67,12 +67,6 @@ class AmazonDetailCrawler(BaseCrawler):
         if not self.load_xpaths(self.account_name, self.page_type):
             return False
 
-        # [DEBUG] 로드된 xpaths 확인
-        print(f"[DEBUG] Loaded xpaths keys: {list(self.xpaths.keys())}")
-        print(f"[DEBUG] trade_in in xpaths: {'trade_in' in self.xpaths}")
-        if 'trade_in' in self.xpaths:
-            print(f"[DEBUG] trade_in value: {self.xpaths['trade_in']}")
-
         self.setup_driver()
 
         if self.login_success is False:
@@ -167,31 +161,6 @@ class AmazonDetailCrawler(BaseCrawler):
             print(f"[ERROR] Failed to load product list: {e}")
             traceback.print_exc()
             return []
-
-    def extract_trade_in(self, tree):
-        """Trade-in 값 추출 (a-offscreen 중복 텍스트 제외)"""
-        try:
-            from copy import deepcopy
-
-            xpath = self.xpaths.get('trade_in', {}).get('xpath')
-            if not xpath:
-                return None
-
-            container = tree.xpath(xpath)
-            if not container:
-                return None
-
-            elem_copy = deepcopy(container[0])
-
-            for offscreen in elem_copy.xpath('.//span[@class="a-offscreen"]'):
-                offscreen.getparent().remove(offscreen)
-
-            text = elem_copy.text_content().strip()
-            return text if text else None
-        except Exception as e:
-            print(f"[ERROR] Failed to extract trade_in: {e}")
-            traceback.print_exc()
-            return None
 
     def extract_asin_from_url(self, product_url):
         """URL에서 ASIN 추출"""
@@ -417,11 +386,11 @@ class AmazonDetailCrawler(BaseCrawler):
             # Trade-in 섹션은 JS로 늦게 로드될 수 있으므로 최신 HTML로 재파싱
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
-            trade_in = self.extract_trade_in(tree)
-            hhp_carrier = self.extract_with_fallback(tree, self.xpaths.get('hhp_carrier', {}).get('xpath'))
-            sku_popularity = self.extract_with_fallback(tree, self.xpaths.get('sku_popularity', {}).get('xpath'))
-            bundle = self.extract_with_fallback(tree, self.xpaths.get('bundle', {}).get('xpath'))
-            retailer_membership_discounts = self.extract_with_fallback(tree, self.xpaths.get('retailer_membership_discounts', {}).get('xpath'))
+            trade_in = self.safe_extract(tree, 'trade_in')
+            hhp_carrier = self.safe_extract(tree, 'hhp_carrier')
+            sku_popularity = self.safe_extract(tree, 'sku_popularity')
+            bundle = self.safe_extract(tree, 'bundle')
+            retailer_membership_discounts = self.safe_extract(tree, 'retailer_membership_discounts')
 
             # Additional details 버튼 클릭
             hhp_storage = None
@@ -462,8 +431,8 @@ class AmazonDetailCrawler(BaseCrawler):
 
             # HHP 스펙 및 랭크 추출
             if additional_details_found:
-                hhp_storage = self.extract_with_fallback(tree, self.xpaths.get('hhp_storage', {}).get('xpath'))
-                hhp_color = self.extract_with_fallback(tree, self.xpaths.get('hhp_color', {}).get('xpath'))
+                hhp_storage = self.safe_extract(tree, 'hhp_storage')
+                hhp_color = self.safe_extract(tree, 'hhp_color')
             else:
                 fallback_storage_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Memory Storage Capacity')]/following-sibling::td/text()"
                 fallback_color_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Color')]/following-sibling::td/text()"
@@ -485,10 +454,10 @@ class AmazonDetailCrawler(BaseCrawler):
                 pass
 
             # 리뷰 관련 필드
-            count_of_reviews_raw = self.extract_with_fallback(tree, self.xpaths.get('count_of_reviews', {}).get('xpath'))
+            count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
             count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw, self.account_name)
 
-            star_rating_raw = self.extract_with_fallback(tree, self.xpaths.get('star_rating', {}).get('xpath'))
+            star_rating_raw = self.safe_extract(tree, 'star_rating')
             star_rating = data_extractor.extract_rating(star_rating_raw, self.account_name)
 
             count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
@@ -509,7 +478,7 @@ class AmazonDetailCrawler(BaseCrawler):
                 page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
 
-                summarized_review_content = self.extract_with_fallback(tree, self.xpaths.get('summarized_review_content', {}).get('xpath'))
+                summarized_review_content = self.safe_extract(tree, 'summarized_review_content')
             except Exception:
                 pass
 
