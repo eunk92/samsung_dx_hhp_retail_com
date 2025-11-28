@@ -289,7 +289,7 @@ class WalmartDetailCrawler(BaseCrawler):
             # 추가 필드 추출
             number_of_ppl_purchased_yesterday = self.safe_extract(tree, 'number_of_ppl_purchased_yesterday')
             number_of_ppl_added_to_carts = self.safe_extract(tree, 'number_of_ppl_added_to_carts')
-            sku_popularity = self.safe_extract(tree, 'sku_popularity')
+            sku_popularity = self.safe_extract_join(tree, 'sku_popularity', separator=", ")
             savings = self.safe_extract(tree, 'savings')
             discount_type = self.safe_extract(tree, 'discount_type')
 
