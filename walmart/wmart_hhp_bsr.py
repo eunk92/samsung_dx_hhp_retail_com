@@ -50,6 +50,7 @@ class WalmartBSRCrawler(BaseCrawler):
         self.account_name = 'Walmart'
         self.page_type = 'bsr'
         self.batch_id = batch_id
+        self.standalone = batch_id is None  # 개별 실행 여부
         self.calendar_week = None
         self.url_template = None
 
@@ -250,8 +251,29 @@ class WalmartBSRCrawler(BaseCrawler):
         print(f"[INFO] Initialize completed: batch_id={self.batch_id}, calendar_week={self.calendar_week}")
         return True
 
+    def scroll_to_bottom(self):
+        """스크롤: 300px씩 점진적 스크롤 → 페이지 하단까지 진행"""
+        try:
+            scroll_step = 300
+            current_position = 0
+
+            while True:
+                current_position += scroll_step
+                self.page.evaluate(f"window.scrollTo(0, {current_position});")
+                time.sleep(random.uniform(0.3, 0.7))
+
+                total_height = self.page.evaluate("document.body.scrollHeight")
+                if current_position >= total_height:
+                    break
+
+            time.sleep(random.uniform(1, 3))
+
+        except Exception as e:
+            print(f"[ERROR] Scroll failed: {e}")
+            traceback.print_exc()
+
     def crawl_page(self, page_number):
-        """페이지 크롤링: 페이지 로드 → CAPTCHA 처리 → HTML 파싱 → 제품 데이터 추출"""
+        """페이지 크롤링: 페이지 로드 → CAPTCHA 처리 → 스크롤 → HTML 파싱(40개 검증) → 제품 데이터 추출"""
         try:
             url = self.url_template.replace('{page}', str(page_number))
 
@@ -266,10 +288,24 @@ class WalmartBSRCrawler(BaseCrawler):
             self.handle_captcha()
             time.sleep(random.uniform(3, 7))
 
-            page_html = self.page.content()
-            tree = html.fromstring(page_html)
+            # 40개 검증 (최대 3회 재시도: 파싱 → 부족하면 스크롤 → 재파싱)
+            base_containers = []
+            expected_products = 40
 
-            base_containers = tree.xpath(base_container_xpath)
+            for attempt in range(1, 4):
+                page_html = self.page.content()
+                tree = html.fromstring(page_html)
+                base_containers = tree.xpath(base_container_xpath)
+
+                if len(base_containers) >= expected_products:
+                    break
+
+                if attempt < 3:
+                    print(f"[WARNING] Page {page_number}: {len(base_containers)}/{expected_products} products, retrying ({attempt}/3)...")
+                    self.scroll_to_bottom()
+                    time.sleep(random.uniform(3, 5))
+
+            print(f"[INFO] Page {page_number}: {len(base_containers)} products found")
 
             products = []
             for idx, item in enumerate(base_containers, 1):
@@ -513,6 +549,8 @@ class WalmartBSRCrawler(BaseCrawler):
                 self.playwright.stop()
             if self.db_conn:
                 self.db_conn.close()
+            if self.standalone:
+                input("\n엔터키를 누르면 종료합니다...")
 
 
 def main():

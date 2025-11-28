@@ -30,14 +30,14 @@ from playwright.sync_api import sync_playwright
 
 # 테스트할 XPath 목록 (필드명: [xpath 후보들])
 TEST_XPATHS = {
-    'example_field': [
+     'example_field': [
         # 테스트할 XPath를 여기에 추가
         "//div[@class='example']//span/text()",
     ],
 }
 
 # 컨테이너 XPath (리스트 페이지용)
-CONTAINER_XPATH = "//div[contains(@data-testid, 'list-view')]//div[contains(@class, 'product-card')]"
+CONTAINER_XPATH = ""
 
 # ============================================================================
 # 테스터 클래스
@@ -51,51 +51,67 @@ class WalmartXPathTester:
         self.page = None
 
     def setup_playwright(self):
-        """Playwright 브라우저 설정 (Walmart용)"""
+        """Playwright 브라우저 설정 (메인 크롤러와 동일)"""
         print("[INFO] Playwright 브라우저 설정 중...")
 
         # Windows TEMP 폴더 문제 해결
         temp_dir = 'C:\\Temp'
-        if not os.path.exists(temp_dir):
-            os.makedirs(temp_dir)
+        os.makedirs(temp_dir, exist_ok=True)
         os.environ['TEMP'] = temp_dir
         os.environ['TMP'] = temp_dir
 
         self.playwright = sync_playwright().start()
 
-        # Chromium 브라우저 실행
+        # Chromium 브라우저 실행 (메인 크롤러와 동일)
         self.browser = self.playwright.chromium.launch(
             headless=False,
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
                 '--no-sandbox',
-                '--lang=en-US',
-                '--disable-infobars',
-                '--disable-extensions',
                 '--start-maximized',
+                '--lang=en-US'
             ]
         )
 
-        # 컨텍스트 생성
+        # 컨텍스트 생성 (메인 크롤러와 동일)
         self.context = self.browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            locale='en-US',
-            timezone_id='America/New_York'
+            viewport=None,
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            locale='en-US'
         )
 
-        # 자동화 감지 방지 스크립트
+        # 자동화 감지 방지 스크립트 (메인 크롤러와 동일)
         self.context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
+            };
         """)
 
         self.page = self.context.new_page()
-        self.page.set_default_timeout(60000)
-
         print("[INFO] Playwright 브라우저 설정 완료")
+
+    def scroll_to_bottom(self):
+        """스크롤: 300px씩 점진적 스크롤 → 페이지 하단까지 진행"""
+        try:
+            scroll_step = 300
+            current_position = 0
+            while True:
+                current_position += scroll_step
+                self.page.evaluate(f"window.scrollTo(0, {current_position});")
+                time.sleep(random.uniform(0.3, 0.7))
+                total_height = self.page.evaluate("document.body.scrollHeight")
+                if current_position >= total_height:
+                    break
+            time.sleep(random.uniform(1, 3))
+        except Exception as e:
+            print(f"[ERROR] Scroll failed: {e}")
 
     def handle_captcha(self):
         """CAPTCHA 감지 및 처리"""
@@ -199,6 +215,10 @@ class WalmartXPathTester:
             print("[TIP] 페이지가 정상이면 그냥 엔터를 누르세요.")
             input()
             time.sleep(2)
+
+        # 페이지 하단까지 스크롤 (요소 로딩을 위해)
+        print("[INFO] 하단까지 스크롤 중...")
+        self.scroll_to_bottom()
 
         print("[INFO] 페이지 로딩 완료")
         return html.fromstring(self.page.content())
