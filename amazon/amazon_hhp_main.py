@@ -207,12 +207,12 @@ class AmazonMainCrawler(BaseCrawler):
     def scroll_to_bottom(self):
         """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
         try:
-            scroll_step = 300
             current_position = 0
             while True:
+                scroll_step = random.randint(250, 350)
                 current_position += scroll_step
                 self.driver.execute_script(f"window.scrollTo(0, {current_position});")
-                time.sleep(random.uniform(0.3, 0.5))
+                time.sleep(random.uniform(0.5, 0.7))
                 total_height = self.driver.execute_script("return document.body.scrollHeight")
                 if current_position >= total_height:
                     break
