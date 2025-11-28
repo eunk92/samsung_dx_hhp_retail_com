@@ -42,43 +42,78 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 
+# 재시도 설정
+MAX_RETRY = 3
+
 
 class AmazonDetailCrawler(BaseCrawler):
     """
     Amazon Detail 페이지 크롤러
     """
 
-    def __init__(self, batch_id=None, login_success=None):
-        """초기화. batch_id: 통합 크롤러에서 전달, login_success: 로그인 성공 여부"""
+    def __init__(self, batch_id=None, login_success=None, test_mode=False):
+        """초기화. batch_id: 통합 크롤러에서 전달, login_success: 로그인 성공 여부, test_mode: 테스트 모드 여부"""
         super().__init__()
         self.batch_id = batch_id
         self.account_name = 'Amazon'
         self.page_type = 'detail'
         self.cookies_loaded = False
         self.login_success = login_success
-        # 테스트 모드: batch_id가 전달되지 않으면 테스트 테이블 사용
-        self.test_mode = batch_id is None
+        self.test_mode = test_mode
+        self.standalone = batch_id is None
 
     def initialize(self):
         """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
+        # 1. batch_id 설정
         if not self.batch_id:
             self.batch_id = 'a_20251126_151351'
 
+        # 2. DB 연결
         if not self.connect_db():
+            print("[ERROR] Initialize failed: DB connection failed")
             return False
+
+        # 3. XPath 로드
         if not self.load_xpaths(self.account_name, self.page_type):
+            print(f"[ERROR] Initialize failed: XPath load failed (account={self.account_name}, page_type={self.page_type})")
             return False
 
-        self.setup_driver()
+        # 4. WebDriver 설정
+        try:
+            self.setup_driver()
+        except Exception as e:
+            print(f"[ERROR] Initialize failed: WebDriver setup failed - {e}")
+            traceback.print_exc()
+            return False
 
+        # 5. 쿠키 로드
         if self.login_success is False:
             self.cookies_loaded = False
         else:
             self.cookies_loaded = self.load_cookies(self.account_name)
 
+        # 6. 로그 정리
         self.cleanup_old_logs()
 
+        print(f"[INFO] Initialize completed: batch_id={self.batch_id}, cookies_loaded={self.cookies_loaded}")
         return True
+
+    def scroll_to_bottom(self):
+        """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
+        try:
+            scroll_step = 300
+            current_position = 0
+            while True:
+                current_position += scroll_step
+                self.driver.execute_script(f"window.scrollTo(0, {current_position});")
+                time.sleep(random.uniform(0.3, 0.5))
+                total_height = self.driver.execute_script("return document.body.scrollHeight")
+                if current_position >= total_height:
+                    break
+            time.sleep(random.uniform(1, 2))
+        except Exception as e:
+            print(f"[WARNING] Scroll failed: {e}")
+            traceback.print_exc()
 
     def run_login_and_reload_cookies(self):
         """로그인 스크립트 실행 후 쿠키 갱신"""
@@ -179,6 +214,118 @@ class AmazonDetailCrawler(BaseCrawler):
 
         return None
 
+    def is_throttled(self):
+        """현재 페이지가 쓰로틀링 상태인지 확인"""
+        page_source = self.driver.page_source.lower()
+        return "request was throttled" in page_source or "please wait a moment and refresh" in page_source
+
+    def restart_browser(self, url):
+        """브라우저 재시작: 드라이버 종료 → 새 드라이버 생성 → URL 접근"""
+        try:
+            print("[INFO] Closing browser...")
+            if self.driver:
+                self.driver.quit()
+
+            print("[INFO] Waiting before restart...")
+            time.sleep(random.uniform(10, 15))
+
+            print("[INFO] Starting new browser...")
+            self.setup_driver()
+
+            # 쿠키 재로드
+            if self.login_success is not False:
+                self.cookies_loaded = self.load_cookies(self.account_name)
+
+            print(f"[INFO] Accessing URL: {url[:80]}...")
+            self.driver.get(url)
+            time.sleep(random.uniform(8, 12))
+
+            return True
+        except Exception as e:
+            print(f"[ERROR] Browser restart failed: {e}")
+            return False
+
+    def check_and_handle_throttling(self, url, max_retries=2, max_browser_restarts=3):
+        """쓰로틀링 메시지 감지 및 처리"""
+        # 1단계: 새로고침 재시도
+        for retry in range(max_retries):
+            if self.is_throttled():
+                print(f"[WARNING] Throttling detected (refresh attempt {retry + 1}/{max_retries})")
+                print("[INFO] Waiting before refresh...")
+                time.sleep(random.uniform(15, 20))
+
+                print("[INFO] Refreshing page...")
+                self.driver.refresh()
+                time.sleep(random.uniform(8, 12))
+            else:
+                return True
+
+        # 2단계: URL 직접 접근 시도
+        if self.is_throttled():
+            print(f"[WARNING] Still throttled after {max_retries} refreshes. Trying direct URL access...")
+            time.sleep(random.uniform(20, 25))
+
+            print(f"[INFO] Accessing URL directly: {url[:80]}...")
+            self.driver.get(url)
+            time.sleep(random.uniform(10, 15))
+
+            if not self.is_throttled():
+                print("[OK] Direct URL access successful")
+                return True
+
+        # 3단계: 브라우저 재시작 시도
+        for restart_attempt in range(max_browser_restarts):
+            if not self.is_throttled():
+                return True
+
+            print(f"[WARNING] Still throttled. Restarting browser (attempt {restart_attempt + 1}/{max_browser_restarts})...")
+
+            if not self.restart_browser(url):
+                print(f"[ERROR] Browser restart attempt {restart_attempt + 1} failed")
+                continue
+
+            time.sleep(random.uniform(5, 8))
+
+            if not self.is_throttled():
+                print(f"[OK] Browser restart successful on attempt {restart_attempt + 1}")
+                return True
+
+        print(f"[ERROR] Still throttled after {max_browser_restarts} browser restarts")
+        return False
+
+    def check_and_handle_sorry_page(self, max_retries=3):
+        """Sorry/Robot check 페이지 감지 및 처리"""
+        for attempt in range(max_retries):
+            page_source = self.driver.page_source.lower()
+            title = self.driver.title.lower()
+
+            # Sorry/Robot check 페이지 감지 (처음 2000자만 확인)
+            is_sorry_page = (
+                'sorry' in title or
+                'robot check' in title or
+                'sorry' in page_source[:2000] or
+                'robot check' in page_source[:2000]
+            )
+
+            if is_sorry_page:
+                print(f"[WARNING] Sorry/Robot check page detected (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    print(f"[INFO] Refreshing page in 3-5 seconds...")
+                    time.sleep(random.uniform(3, 5))
+                    self.driver.refresh()
+                    print(f"[INFO] Page refreshed, waiting for load...")
+                    time.sleep(random.uniform(4, 6))
+                    continue
+                else:
+                    print(f"[ERROR] Still sorry page after {max_retries} retries")
+                    return False
+            else:
+                if attempt > 0:
+                    print(f"[OK] Page loaded successfully after {attempt} refresh(es)")
+                return True
+
+        return False
+
     def handle_captcha(self):
         """CAPTCHA 자동 해결"""
         try:
@@ -244,14 +391,18 @@ class AmazonDetailCrawler(BaseCrawler):
             return False
 
     def extract_reviews_from_detail_page(self, tree, max_reviews=10):
-        """상세 페이지에서 리뷰 추출 (하드코딩 XPath)"""
+        """상세 페이지에서 리뷰 추출"""
         try:
             # 리뷰 컨테이너 단위로 추출 (text() 대신 element 단위)
-            review_container_xpath = "//ul[@id='cm-cr-dp-review-list']//div[@data-hook='review-collapsed']"
+            review_container_xpath = self.xpaths.get('review_container', {}).get('xpath')
+            if not review_container_xpath:
+                print("[ERROR] review_container XPath not found")
+                return None
             review_containers = tree.xpath(review_container_xpath)
 
             if not review_containers:
-                return data_extractor.get_no_reviews_text(self.account_name)
+                print("[ERROR] review_container not found")
+                return None
 
             review_containers = review_containers[:max_reviews]
 
@@ -265,7 +416,7 @@ class AmazonDetailCrawler(BaseCrawler):
                         cleaned_reviews.append(cleaned)
 
             if not cleaned_reviews:
-                return data_extractor.get_no_reviews_text(self.account_name)
+                return None
 
             formatted_reviews = [f"review{idx} - {review}" for idx, review in enumerate(cleaned_reviews, 1)]
             result = ' ||| '.join(formatted_reviews)
@@ -319,8 +470,8 @@ class AmazonDetailCrawler(BaseCrawler):
 
             review_xpaths = [
                 self.xpaths.get('detailed_review_content', {}).get('xpath') or '',
-                "//div[@data-hook='review']//span[@data-hook='review-body']//span/text()",
-                "//div[@id='cm-cr-dp-review-list']//span[@data-hook='review-body']//span/text()",
+                self.xpaths.get('review_fallback_1', {}).get('xpath') or '',
+                self.xpaths.get('review_fallback_2', {}).get('xpath') or '',
             ]
 
             review_texts = []
@@ -361,17 +512,31 @@ class AmazonDetailCrawler(BaseCrawler):
                 return product
 
             self.driver.get(product_url)
-            time.sleep(10)
+            time.sleep(random.uniform(8, 12))
+
+            # Sorry/Robot check 페이지 처리
+            if not self.check_and_handle_sorry_page(max_retries=3):
+                print(f"[SKIP] Skipping product due to persistent sorry/robot check page")
+                return product
+
+            # 쓰로틀링 처리
+            if not self.check_and_handle_throttling(product_url):
+                print(f"[SKIP] Skipping product due to throttling")
+                return product
+
+            # 추가 대기 (봇 감지 후 안정화)
+            time.sleep(random.uniform(2, 4))
 
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
 
-            # 로그인/CAPTCHA 체크
+            # 로그인 체크
             current_url = self.driver.current_url
             if 'signin' in current_url or 'ap/signin' in current_url:
                 return product
 
-            if 'robot' in page_html.lower() or 'captcha' in page_html.lower():
+            # CAPTCHA 체크 (봇 감지와 별도로 CAPTCHA 입력 필요한 경우)
+            if 'captcha' in page_html.lower():
                 if self.handle_captcha():
                     self.driver.get(product_url)
                     time.sleep(10)  # CAPTCHA 후 재로드 시에도 충분히 대기
@@ -379,6 +544,11 @@ class AmazonDetailCrawler(BaseCrawler):
                     tree = html.fromstring(page_html)
                 else:
                     return product
+
+            # 전체 콘텐츠 로드: 하단까지 스크롤 → 맨 위로 복귀
+            self.scroll_to_bottom()
+            self.driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(random.uniform(0.5, 1))
 
             # 기본값 초기화
             country = 'SEA'
@@ -408,65 +578,94 @@ class AmazonDetailCrawler(BaseCrawler):
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
                 time.sleep(2)
 
-                expand_button = WebDriverWait(self.driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, "//span[contains(text(), 'Additional details')]/ancestor::a"))
-                )
-                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", expand_button)
-                time.sleep(1)
-                expand_button.click()
-                time.sleep(1)
-                additional_details_found = True
-
-                try:
-                    item_details_button = WebDriverWait(self.driver, 5).until(
-                        EC.element_to_be_clickable((By.XPATH, "//span[contains(text(), 'Item details')]/ancestor::a"))
+                additional_details_xpath = self.xpaths.get('additional_details_button', {}).get('xpath')
+                if additional_details_xpath:
+                    additional_details_button = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, additional_details_xpath))
                     )
-                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", item_details_button)
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", additional_details_button)
                     time.sleep(1)
-                    item_details_button.click()
+                    additional_details_button.click()
                     time.sleep(1)
-                except Exception:
-                    pass
+                    additional_details_found = True
+
+                item_details_xpath = self.xpaths.get('item_details_button', {}).get('xpath')
+                if item_details_xpath:
+                    try:
+                        item_details_button = WebDriverWait(self.driver, 5).until(
+                            EC.element_to_be_clickable((By.XPATH, item_details_xpath))
+                        )
+                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", item_details_button)
+                        time.sleep(1)
+                        item_details_button.click()
+                        time.sleep(1)
+                    except Exception as e:
+                        print(f"[WARNING] Item details button click failed: {e}")
+                        traceback.print_exc()
 
                 page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
 
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[WARNING] Additional details section failed: {e}")
+                traceback.print_exc()
 
             # HHP 스펙 및 랭크 추출
             if additional_details_found:
                 hhp_storage = self.safe_extract(tree, 'hhp_storage')
                 hhp_color = self.safe_extract(tree, 'hhp_color')
             else:
-                fallback_storage_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Memory Storage Capacity')]/following-sibling::td/text()"
-                fallback_color_xpath = "//table[@id='productDetails_detailBullets_sections1']//th[contains(text(), 'Color')]/following-sibling::td/text()"
-                hhp_storage = self.extract_with_fallback(tree, fallback_storage_xpath)
-                hhp_color = self.extract_with_fallback(tree, fallback_color_xpath)
+                hhp_storage = self.safe_extract(tree, 'hhp_storage_fallback')
+                hhp_color = self.safe_extract(tree, 'hhp_color_fallback')
 
-            try:
-                rank1_elements = tree.xpath("//th[contains(text(), 'Best Sellers Rank')]/following-sibling::td//li[1]//span[@class='a-list-item']/span")
-                if rank1_elements:
-                    rank_1 = rank1_elements[0].text_content().strip()
-            except Exception:
-                pass
+            rank_1 = self.safe_extract(tree, 'rank_1')
+            rank_2 = self.safe_extract(tree, 'rank_2')
 
-            try:
-                rank2_elements = tree.xpath("//th[contains(text(), 'Best Sellers Rank')]/following-sibling::td//li[2]//span[@class='a-list-item']/span")
-                if rank2_elements:
-                    rank_2 = rank2_elements[0].text_content().strip()
-            except Exception:
-                pass
+            # 리뷰 관련 필드 (최대 3회 재시도)
+            count_of_reviews = None
+            star_rating = None
+            count_of_star_ratings = None
 
-            # 리뷰 관련 필드
-            count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
-            count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw, self.account_name)
+            # "No customer reviews" 텍스트 감지 (tree에서 검색)
+            no_review_keywords = ['no customer reviews', 'no reviews', 'be the first to review']
+            page_text = tree.text_content().lower() if tree is not None else ''
+            is_no_reviews = any(keyword in page_text for keyword in no_review_keywords)
 
-            star_rating_raw = self.safe_extract(tree, 'star_rating')
-            star_rating = data_extractor.extract_rating(star_rating_raw, self.account_name)
+            if is_no_reviews:
+                count_of_reviews = '0'
+                star_rating = 'No customer reviews'
+                count_of_star_ratings = 'No customer reviews'
+            else:
+                for attempt in range(1, MAX_RETRY + 1):
+                    page_html = self.driver.page_source
+                    tree = html.fromstring(page_html)
 
-            count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
-            count_of_star_ratings = data_extractor.extract_star_ratings_count(tree, count_of_reviews, count_of_star_ratings_xpath, self.account_name)
+                    if count_of_reviews is None:
+                        count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
+                        count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
+
+                    if star_rating is None:
+                        star_rating_raw = self.safe_extract(tree, 'star_rating')
+                        star_rating = data_extractor.extract_rating(star_rating_raw)
+
+                    if count_of_star_ratings is None:
+                        count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
+                        count_of_star_ratings = data_extractor.extract_star_ratings_count(tree, count_of_reviews, count_of_star_ratings_xpath, self.account_name)
+
+                    # 필수 필드 모두 추출 성공하면 종료
+                    if star_rating and count_of_reviews and count_of_star_ratings:
+                        break
+
+                    if attempt < MAX_RETRY:
+                        time.sleep(2)
+                    else:
+                        # 마지막 시도에서도 실패
+                        missing = []
+                        if not star_rating: missing.append('star_rating')
+                        if not count_of_reviews: missing.append('count_of_reviews')
+                        if not count_of_star_ratings: missing.append('count_of_star_ratings')
+                        if missing:
+                            print(f"[WARNING] 리뷰 데이터 추출 실패 (시도 {attempt}/{MAX_RETRY}) - 미추출: {', '.join(missing)}")
 
             # 리뷰 섹션으로 이동
             summarized_review_content = None
@@ -474,11 +673,13 @@ class AmazonDetailCrawler(BaseCrawler):
                 self.driver.execute_script("window.scrollTo(0, 0);")
                 time.sleep(1)
 
-                review_link = WebDriverWait(self.driver, 5).until(
-                    EC.element_to_be_clickable((By.ID, "acrCustomerReviewLink"))
-                )
-                review_link.click()
-                time.sleep(2)
+                review_link_xpath = self.xpaths.get('review_link', {}).get('xpath')
+                if review_link_xpath:
+                    review_link = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, review_link_xpath))
+                    )
+                    review_link.click()
+                    time.sleep(2)
 
                 page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
@@ -487,8 +688,11 @@ class AmazonDetailCrawler(BaseCrawler):
             except Exception:
                 pass
 
-            # 상세 리뷰 추출
-            detailed_review_content = self.extract_reviews_from_detail_page(tree, max_reviews=20)
+            # 상세 리뷰 추출 (리뷰 없으면 건너뜀)
+            if is_no_reviews:
+                detailed_review_content = 'No customer reviews'
+            else:
+                detailed_review_content = self.extract_reviews_from_detail_page(tree, max_reviews=20)
 
             # 결합된 데이터
             detail_data = {
@@ -509,6 +713,7 @@ class AmazonDetailCrawler(BaseCrawler):
                 'hhp_color': hhp_color,
                 'summarized_review_content': summarized_review_content,
                 'detailed_review_content': detailed_review_content,
+                'crawl_strdatetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             }
 
             combined_data = {**product, **detail_data}
@@ -526,7 +731,6 @@ class AmazonDetailCrawler(BaseCrawler):
 
         try:
             cursor = self.db_conn.cursor()
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
             # 테스트 모드면 test_hhp_retail_com, 통합 크롤러면 hhp_retail_com
             table_name = 'test_hhp_retail_com' if self.test_mode else 'hhp_retail_com'
@@ -589,7 +793,7 @@ class AmazonDetailCrawler(BaseCrawler):
                     product.get('bsr_rank'),
                     product.get('number_of_units_purchased_past_month'),
                     product.get('calendar_week'),
-                    current_time,
+                    product.get('crawl_strdatetime'),
                     product.get('batch_id')
                 )
 
@@ -613,6 +817,8 @@ class AmazonDetailCrawler(BaseCrawler):
                             saved_count += 1
                         except Exception as single_error:
                             print(f"[ERROR] DB save failed: {single_product.get('item')}: {single_error}")
+                            query = cursor.mogrify(insert_query, product_to_tuple(single_product))
+                            print(f"[DEBUG] Query:\n{query.decode('utf-8')}")
                             traceback.print_exc()
                             self.db_conn.rollback()
 
@@ -658,7 +864,7 @@ class AmazonDetailCrawler(BaseCrawler):
                         total_saved += saved_count
                         crawled_products = []
 
-                    time.sleep(5)
+                    time.sleep(random.uniform(3, 7))
 
                 except Exception as e:
                     print(f"[ERROR] Product {i} failed: {e}")
@@ -682,11 +888,13 @@ class AmazonDetailCrawler(BaseCrawler):
                 self.driver.quit()
             if self.db_conn:
                 self.db_conn.close()
+            if self.standalone:
+                input("Press Enter to exit...")
 
 
 def main():
-    """개별 실행 진입점 (기본 배치 ID 사용)"""
-    crawler = AmazonDetailCrawler()
+    """개별 실행 진입점 (테스트 모드, 기본 배치 ID 사용)"""
+    crawler = AmazonDetailCrawler(batch_id=None, login_success=None, test_mode=True)
     crawler.run()
 
 

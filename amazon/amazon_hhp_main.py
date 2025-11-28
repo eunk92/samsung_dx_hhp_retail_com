@@ -25,6 +25,7 @@ Amazon Main 페이지 크롤러
 import sys
 import os
 import time
+import random
 import traceback
 from datetime import datetime
 from lxml import html
@@ -52,30 +53,156 @@ class AmazonMainCrawler(BaseCrawler):
         self.calendar_week = None
         self.url_template = None
         self.cookies_loaded = False
-
+        self.current_rank = 0
+        self.standalone = batch_id is None
         self.test_count = 5  # 테스트 모드
         self.max_products = 300  # 운영 모드
-        self.current_rank = 0
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 1개월 전 로그 정리"""
+        # 1. DB 연결
         if not self.connect_db():
+            print("[ERROR] Initialize failed: DB connection failed")
             return False
+
+        # 2. XPath 로드
         if not self.load_xpaths(self.account_name, self.page_type):
+            print(f"[ERROR] Initialize failed: XPath load failed (account={self.account_name}, page_type={self.page_type})")
             return False
+
+        # 3. URL 템플릿 로드
         self.url_template = self.load_page_urls(self.account_name, self.page_type)
         if not self.url_template:
+            print(f"[ERROR] Initialize failed: URL template load failed (account={self.account_name}, page_type={self.page_type})")
             return False
-        self.setup_driver_stealth(self.account_name)  # Amazon만 강화된 봇 감지 회피 적용
-        # Main 크롤러는 쿠키 로드 안함 (순위 변동 방지)
 
+        # 4. WebDriver 설정
+        try:
+            self.setup_driver_stealth(self.account_name)  # Amazon만 강화된 봇 감지 회피 적용
+        except Exception as e:
+            print(f"[ERROR] Initialize failed: WebDriver setup failed - {e}")
+            traceback.print_exc()
+            return False
+
+        # 5. batch_id 생성
         if not self.batch_id:
             self.batch_id = self.generate_batch_id(self.account_name)
 
+        # 6. calendar_week 생성 및 로그 정리
         self.calendar_week = self.generate_calendar_week()
         self.cleanup_old_logs()
 
+        print(f"[INFO] Initialize completed: batch_id={self.batch_id}, calendar_week={self.calendar_week}")
         return True
+
+    def is_throttled(self):
+        """현재 페이지가 쓰로틀링 상태인지 확인"""
+        page_source = self.driver.page_source.lower()
+        return "request was throttled" in page_source or "please wait a moment and refresh" in page_source
+
+    def restart_browser(self, url):
+        """브라우저 재시작: 드라이버 종료 → 새 드라이버 생성 → URL 접근"""
+        try:
+            print("[INFO] Closing browser...")
+            if self.driver:
+                self.driver.quit()
+
+            print("[INFO] Waiting before restart...")
+            time.sleep(random.uniform(10, 15))
+
+            print("[INFO] Starting new browser...")
+            self.setup_driver_stealth(self.account_name)
+
+            print(f"[INFO] Accessing URL: {url[:80]}...")
+            self.driver.get(url)
+            time.sleep(random.uniform(8, 12))
+
+            return True
+        except Exception as e:
+            print(f"[ERROR] Browser restart failed: {e}")
+            return False
+
+    def check_and_handle_throttling(self, page_number, url, max_retries=2, max_browser_restarts=3):
+        """쓰로틀링 메시지 감지 및 처리"""
+        # 1단계: 새로고침 재시도
+        for retry in range(max_retries):
+            if self.is_throttled():
+                print(f"[WARNING] Throttling detected on page {page_number} (refresh attempt {retry + 1}/{max_retries})")
+                print("[INFO] Waiting before refresh...")
+                time.sleep(random.uniform(15, 20))
+
+                print("[INFO] Refreshing page...")
+                self.driver.refresh()
+                time.sleep(random.uniform(8, 12))
+            else:
+                print("[OK] No throttling detected")
+                return True
+
+        # 2단계: URL 직접 접근 시도
+        if self.is_throttled():
+            print(f"[WARNING] Still throttled after {max_retries} refreshes. Trying direct URL access...")
+            time.sleep(random.uniform(20, 25))
+
+            print(f"[INFO] Accessing URL directly: {url[:80]}...")
+            self.driver.get(url)
+            time.sleep(random.uniform(10, 15))
+
+            if not self.is_throttled():
+                print("[OK] Direct URL access successful")
+                return True
+
+        # 3단계: 브라우저 재시작 시도
+        for restart_attempt in range(max_browser_restarts):
+            if not self.is_throttled():
+                return True
+
+            print(f"[WARNING] Still throttled. Restarting browser (attempt {restart_attempt + 1}/{max_browser_restarts})...")
+
+            if not self.restart_browser(url):
+                print(f"[ERROR] Browser restart attempt {restart_attempt + 1} failed")
+                continue
+
+            time.sleep(random.uniform(5, 8))
+
+            if not self.is_throttled():
+                print(f"[OK] Browser restart successful on attempt {restart_attempt + 1}")
+                return True
+
+        print(f"[ERROR] Still throttled after {max_browser_restarts} browser restarts")
+        return False
+
+    def check_and_handle_sorry_page(self, max_retries=3):
+        """Sorry/Robot check 페이지 감지 및 처리"""
+        for attempt in range(max_retries):
+            page_source = self.driver.page_source.lower()
+            title = self.driver.title.lower()
+
+            # Sorry/Robot check 페이지 감지 (처음 2000자만 확인)
+            is_sorry_page = (
+                'sorry' in title or
+                'robot check' in title or
+                'sorry' in page_source[:2000] or
+                'robot check' in page_source[:2000]
+            )
+
+            if is_sorry_page:
+                print(f"[WARNING] Sorry/Robot check page detected (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    print(f"[INFO] Refreshing page in 3-5 seconds...")
+                    time.sleep(random.uniform(3, 5))
+                    self.driver.refresh()
+                    print(f"[INFO] Page refreshed, waiting for load...")
+                    time.sleep(random.uniform(4, 6))
+                    continue
+                else:
+                    print(f"[ERROR] Still sorry page after {max_retries} retries")
+                    return False
+            else:
+                if attempt > 0:
+                    print(f"[OK] Page loaded successfully after {attempt} refresh(es)")
+                return True
+
+        return False
 
     def crawl_page(self, page_number):
         """페이지 크롤링: 페이지 로드 → HTML 파싱 → 제품 데이터 추출"""
@@ -88,7 +215,20 @@ class AmazonMainCrawler(BaseCrawler):
                 return []
 
             self.driver.get(url)
-            time.sleep(30)
+            time.sleep(random.uniform(8, 12))
+
+            # Sorry/Robot check 페이지 처리
+            if not self.check_and_handle_sorry_page(max_retries=3):
+                print(f"[SKIP] Skipping page {page_number} due to persistent sorry/robot check page")
+                return []
+
+            # 쓰로틀링 처리
+            if not self.check_and_handle_throttling(page_number, url):
+                print(f"[SKIP] Skipping page {page_number} due to throttling")
+                return []
+
+            # 추가 대기 (봇 감지 후 안정화)
+            time.sleep(random.uniform(3, 5))
 
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
@@ -210,6 +350,8 @@ class AmazonMainCrawler(BaseCrawler):
                                     total_saved += 1
                                 except Exception as single_error:
                                     print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
+                                    query = cursor.mogrify(insert_query, product_to_tuple(single_product))
+                                    print(f"[DEBUG] Query:\n{query.decode('utf-8')}")
                                     traceback.print_exc()
                                     self.db_conn.rollback()
 
@@ -249,7 +391,7 @@ class AmazonMainCrawler(BaseCrawler):
                     if total_products >= target_products:
                         break
 
-                time.sleep(30)
+                time.sleep(random.uniform(28, 32))
                 page_num += 1
 
             print(f"[DONE] Page: {page_num}, Saved: {total_products}, batch_id: {self.batch_id}")
@@ -265,6 +407,9 @@ class AmazonMainCrawler(BaseCrawler):
                 self.driver.quit()
             if self.db_conn:
                 self.db_conn.close()
+            if self.standalone:
+                input("Press Enter to exit...")
+
 
 
 def main():

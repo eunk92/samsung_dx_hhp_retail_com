@@ -166,7 +166,7 @@ class AmazonIntegratedCrawlerTest:
             # STEP 4: Detail
             print(f"\n[STEP 4/4] Detail Crawler...")
             try:
-                crawl_results['detail'] = AmazonDetailCrawler(batch_id=self.batch_id, login_success=self.login_success).run()
+                crawl_results['detail'] = AmazonDetailCrawler(batch_id=self.batch_id, login_success=self.login_success, test_mode=True).run()
             except Exception as e:
                 print(f"[ERROR] Detail: {e}")
                 crawl_results['detail'] = False
