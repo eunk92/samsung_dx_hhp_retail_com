@@ -201,31 +201,26 @@ class AmazonBSRCrawler(BaseCrawler):
 
         return False
 
-    def scroll_until_pagination(self, max_scroll_attempts=10):
-        """페이지네이션이 나타날 때까지 스크롤"""
-        pagination_xpath = '//nav[@aria-label="pagination"]'
-
-        for attempt in range(max_scroll_attempts):
-            # 페이지네이션 확인
-            try:
-                page_html = self.driver.page_source
-                tree = html.fromstring(page_html)
-                pagination = tree.xpath(pagination_xpath)
-                if pagination:
-                    print(f"[OK] Pagination found after {attempt + 1} scroll(s)")
-                    return True
-            except Exception:
-                pass
-
-            # 스크롤 다운
-            self.driver.execute_script("window.scrollBy(0, window.innerHeight);")
+    def scroll_to_bottom(self):
+        """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
+        try:
+            scroll_step = 300
+            current_position = 0
+            while True:
+                current_position += scroll_step
+                self.driver.execute_script(f"window.scrollTo(0, {current_position});")
+                time.sleep(random.uniform(0.3, 0.5))
+                total_height = self.driver.execute_script("return document.body.scrollHeight")
+                if current_position >= total_height:
+                    break
             time.sleep(random.uniform(1, 2))
-
-        print(f"[WARNING] Pagination not found after {max_scroll_attempts} scrolls")
-        return False
+        except Exception as e:
+            print(f"[WARNING] Scroll failed: {e}")
+            traceback.print_exc()
 
     def wait_for_products(self, base_container_xpath, expected_count=50, max_retries=3):
-        """제품이 expected_count개 이상 로드될 때까지 대기"""
+        """제품이 expected_count개 이상 로드될 때까지 대기 (부족하면 스크롤 후 재시도)"""
+        base_containers = []
         for attempt in range(max_retries):
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
@@ -236,7 +231,8 @@ class AmazonBSRCrawler(BaseCrawler):
                 return base_containers
 
             if attempt < max_retries - 1:
-                print(f"[WARNING] Only {len(base_containers)} products found (attempt {attempt + 1}/{max_retries}), waiting...")
+                print(f"[WARNING] Only {len(base_containers)} products found (attempt {attempt + 1}/{max_retries}), scrolling...")
+                self.scroll_to_bottom()
                 time.sleep(random.uniform(3, 5))
 
         print(f"[WARNING] Only {len(base_containers)} products found after {max_retries} attempts")
@@ -268,10 +264,10 @@ class AmazonBSRCrawler(BaseCrawler):
             # 추가 대기 (봇 감지 후 안정화)
             time.sleep(random.uniform(3, 5))
 
-            # 페이지네이션이 나타날 때까지 스크롤
-            self.scroll_until_pagination(max_scroll_attempts=10)
+            # 페이지 하단까지 스크롤 (전체 콘텐츠 로드)
+            self.scroll_to_bottom()
 
-            # 제품 50개 이상 로드될 때까지 대기
+            # 제품 50개 이상 로드될 때까지 대기 (부족하면 스크롤 후 재시도)
             base_containers = self.wait_for_products(base_container_xpath, expected_count=50, max_retries=3)
 
             products = []
