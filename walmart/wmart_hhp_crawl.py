@@ -115,7 +115,7 @@ class WalmartIntegratedCrawler:
             # STEP 3: Detail
             print(f"\n[STEP 3/3] Detail Crawler...")
             try:
-                crawl_results['detail'] = WalmartDetailCrawler(batch_id=self.batch_id).run()
+                crawl_results['detail'] = WalmartDetailCrawler(batch_id=self.batch_id, test_mode=False).run()
             except Exception as e:
                 print(f"[ERROR] Detail: {e}")
                 traceback.print_exc()

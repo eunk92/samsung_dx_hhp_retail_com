@@ -45,14 +45,14 @@ class WalmartDetailCrawler(BaseCrawler):
     Walmart Detail 페이지 크롤러 (Playwright 기반)
     """
 
-    def __init__(self, batch_id=None):
-        """초기화. batch_id: 통합 크롤러에서 전달 (없으면 기본값 사용)"""
+    def __init__(self, batch_id=None, test_mode=False):
+        """초기화. batch_id: 통합 크롤러에서 전달, test_mode: 테스트 모드 여부"""
         super().__init__()
         self.account_name = 'Walmart'
         self.page_type = 'detail'
         self.batch_id = batch_id
-        # 테스트 모드: batch_id가 전달되지 않으면 테스트 테이블 사용
-        self.test_mode = batch_id is None
+        self.test_mode = test_mode        
+        self.standalone = batch_id is None
 
         # Playwright 객체
         self.playwright = None
@@ -106,7 +106,7 @@ class WalmartDetailCrawler(BaseCrawler):
     def handle_captcha(self):
         """CAPTCHA 자동 해결"""
         try:
-            time.sleep(3)
+            time.sleep(random.uniform(1, 5))
 
             captcha_selectors = [
                 'button:has-text("PRESS & HOLD")',
@@ -152,7 +152,7 @@ class WalmartDetailCrawler(BaseCrawler):
                         print("[OK] CAPTCHA solved")
                         return True
                     else:
-                        time.sleep(60)
+                        time.sleep(random.uniform(58, 62))
                         return True
                 except Exception as e:
                     return True
@@ -165,20 +165,26 @@ class WalmartDetailCrawler(BaseCrawler):
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → Playwright 설정 → batch_id 설정"""
+        # 1. DB 연결
         if not self.connect_db():
-            return False
-        if not self.load_xpaths(self.account_name, self.page_type):
-            return False
-        if not self.setup_playwright():
+            print("[ERROR] Initialize failed: DB connection failed")
             return False
 
+        # 2. XPath 로드
+        if not self.load_xpaths(self.account_name, self.page_type):
+            print(f"[ERROR] Initialize failed: XPath load failed (account={self.account_name}, page_type={self.page_type})")
+            return False
+
+        # 3. Playwright 설정
+        if not self.setup_playwright():
+            print("[ERROR] Initialize failed: Playwright setup failed")
+            return False
+
+        # 4. batch_id 설정
         if not self.batch_id:
             self.batch_id = 'w_20251127_123456'
-            if not self.batch_id:
-                print("[ERROR] No batch_id found")
-                return False
-            print(f"[INFO] Using latest batch_id: {self.batch_id}")
 
+        print(f"[INFO] Initialize completed: batch_id={self.batch_id}")
         return True
 
     def load_product_list(self):
@@ -314,9 +320,9 @@ class WalmartDetailCrawler(BaseCrawler):
 
                     try:
                         self.page.wait_for_selector("//button[@aria-label='Close']", timeout=5000, state='visible')
-                        time.sleep(1)
+                        time.sleep(random.uniform(0.5, 1.5))
                     except Exception:
-                        time.sleep(2)
+                        time.sleep(random.uniform(1, 3))
 
                     modal_html = self.page.content()
                     modal_tree = html.fromstring(modal_html)
@@ -352,7 +358,7 @@ class WalmartDetailCrawler(BaseCrawler):
                             similar_section = self.page.locator(similar_products_container_xpath).first
                             if similar_section.is_visible(timeout=1000):
                                 similar_section.scroll_into_view_if_needed()
-                                time.sleep(1)
+                                time.sleep(random.uniform(0.5, 1.5))
                                 break
                         except:
                             pass
@@ -387,14 +393,14 @@ class WalmartDetailCrawler(BaseCrawler):
             count_of_reviews = None
             try:
                 count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
-                count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw, self.account_name)
+                count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
             except Exception:
                 pass
 
             star_rating = None
             try:
                 star_rating_raw = self.safe_extract(tree, 'star_rating')
-                star_rating = data_extractor.extract_rating(star_rating_raw, self.account_name)
+                star_rating = data_extractor.extract_rating(star_rating_raw)
             except Exception:
                 pass
 
@@ -416,7 +422,7 @@ class WalmartDetailCrawler(BaseCrawler):
                 review_button_found = False
 
                 self.page.evaluate("window.scrollTo(0, 0);")
-                time.sleep(1)
+                time.sleep(random.uniform(0.5, 1.5))
 
                 scroll_height = self.page.evaluate("document.body.scrollHeight")
                 current_position = 0
@@ -436,12 +442,12 @@ class WalmartDetailCrawler(BaseCrawler):
                             review_button = self.page.locator(xpath).first
                             if review_button.is_visible(timeout=1000):
                                 review_button.scroll_into_view_if_needed()
-                                time.sleep(2)
+                                time.sleep(random.uniform(1, 3))
 
                                 try:
                                     review_button.click()
                                     review_button_found = True
-                                    time.sleep(5)
+                                    time.sleep(random.uniform(3, 7))
                                     break
                                 except Exception:
                                     continue
@@ -461,9 +467,9 @@ class WalmartDetailCrawler(BaseCrawler):
                         if detailed_review_xpath:
                             try:
                                 self.page.wait_for_selector(detailed_review_xpath, timeout=30000, state='visible')
-                                time.sleep(2)
+                                time.sleep(random.uniform(1, 3))
                             except Exception:
-                                time.sleep(5)
+                                time.sleep(random.uniform(3, 7))
 
                             all_reviews = []
                             current_page = 1
@@ -473,9 +479,9 @@ class WalmartDetailCrawler(BaseCrawler):
                                 if current_page > 1:
                                     try:
                                         self.page.wait_for_load_state('networkidle', timeout=10000)
-                                        time.sleep(2)
+                                        time.sleep(random.uniform(1, 3))
                                     except Exception:
-                                        time.sleep(1)
+                                        time.sleep(random.uniform(0.5, 1.5))
 
                                 page_html = self.page.content()
                                 tree = html.fromstring(page_html)
@@ -505,9 +511,9 @@ class WalmartDetailCrawler(BaseCrawler):
 
                                     if next_page_button.is_visible(timeout=3000):
                                         next_page_button.scroll_into_view_if_needed()
-                                        time.sleep(1)
+                                        time.sleep(random.uniform(0.5, 1.5))
                                         next_page_button.click()
-                                        time.sleep(3)
+                                        time.sleep(random.uniform(2, 4))
                                         current_page = next_page_num
                                     else:
                                         break
@@ -635,6 +641,8 @@ class WalmartDetailCrawler(BaseCrawler):
                             total_saved += 1
                         except Exception as single_error:
                             print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
+                            query = cursor.mogrify(insert_query, product_to_tuple(single_product))
+                            print(f"[DEBUG] Query:\n{query.decode('utf-8')}")
                             traceback.print_exc()
                             self.db_conn.rollback()
 
@@ -700,11 +708,13 @@ class WalmartDetailCrawler(BaseCrawler):
                 self.playwright.stop()
             if self.db_conn:
                 self.db_conn.close()
+            if self.standalone:
+                input("Press Enter to exit...")
 
 
 def main():
-    """개별 실행 진입점 (기본 배치 ID 사용)"""
-    crawler = WalmartDetailCrawler()
+    """개별 실행 진입점 (테스트 모드, 기본 배치 ID 사용)"""
+    crawler = WalmartDetailCrawler(batch_id=None, test_mode=True)
     crawler.run()
 
 

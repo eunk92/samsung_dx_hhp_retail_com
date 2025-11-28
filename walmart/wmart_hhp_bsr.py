@@ -151,7 +151,7 @@ class WalmartBSRCrawler(BaseCrawler):
     def handle_captcha(self):
         """CAPTCHA 자동 해결"""
         try:
-            time.sleep(3)
+            time.sleep(random.uniform(1, 5))
 
             captcha_selectors = [
                 'button:has-text("PRESS & HOLD")',
@@ -178,8 +178,8 @@ class WalmartBSRCrawler(BaseCrawler):
             if not button:
                 page_content = self.page.content().lower()
                 if any(keyword in page_content for keyword in ['press & hold', 'press and hold', 'captcha']):
-                    print("[WARNING] CAPTCHA keywords found - waiting 45s for manual input...")
-                    time.sleep(45)
+                    print("[WARNING] CAPTCHA keywords found - waiting for manual input...")
+                    time.sleep(random.uniform(43, 47))
                     return True
                 return True
 
@@ -204,8 +204,8 @@ class WalmartBSRCrawler(BaseCrawler):
                         print("[OK] CAPTCHA solved")
                         return True
                     else:
-                        print("[WARNING] CAPTCHA still visible - waiting 60s...")
-                        time.sleep(60)
+                        print("[WARNING] CAPTCHA still visible - waiting...")
+                        time.sleep(random.uniform(58, 62))
                         return True
                 except:
                     return True
@@ -218,22 +218,36 @@ class WalmartBSRCrawler(BaseCrawler):
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → Playwright 설정 → batch_id 생성 → 로그 정리"""
+        # 1. DB 연결
         if not self.connect_db():
-            return False
-        if not self.load_xpaths(self.account_name, self.page_type):
-            return False
-        self.url_template = self.load_page_urls(self.account_name, self.page_type)
-        if not self.url_template:
-            return False
-        if not self.setup_playwright():
+            print("[ERROR] Initialize failed: DB connection failed")
             return False
 
+        # 2. XPath 로드
+        if not self.load_xpaths(self.account_name, self.page_type):
+            print(f"[ERROR] Initialize failed: XPath load failed (account={self.account_name}, page_type={self.page_type})")
+            return False
+
+        # 3. URL 템플릿 로드
+        self.url_template = self.load_page_urls(self.account_name, self.page_type)
+        if not self.url_template:
+            print(f"[ERROR] Initialize failed: URL template load failed (account={self.account_name}, page_type={self.page_type})")
+            return False
+
+        # 4. Playwright 설정
+        if not self.setup_playwright():
+            print("[ERROR] Initialize failed: Playwright setup failed")
+            return False
+
+        # 5. batch_id 생성
         if not self.batch_id:
             self.batch_id = self.generate_batch_id(self.account_name)
 
+        # 6. calendar_week 생성 및 로그 정리
         self.calendar_week = self.generate_calendar_week()
         self.cleanup_old_logs()
 
+        print(f"[INFO] Initialize completed: batch_id={self.batch_id}, calendar_week={self.calendar_week}")
         return True
 
     def crawl_page(self, page_number):
@@ -247,10 +261,10 @@ class WalmartBSRCrawler(BaseCrawler):
                 return []
 
             self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            time.sleep(5)
+            time.sleep(random.uniform(3, 7))
 
             self.handle_captcha()
-            time.sleep(5)
+            time.sleep(random.uniform(3, 7))
 
             page_html = self.page.content()
             tree = html.fromstring(page_html)
@@ -434,6 +448,8 @@ class WalmartBSRCrawler(BaseCrawler):
                                         insert_count += 1
                                     except Exception as single_error:
                                         print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
+                                        query = cursor.mogrify(insert_query, product_to_tuple(single_product))
+                                        print(f"[DEBUG] Query:\n{query.decode('utf-8')}")
                                         traceback.print_exc()
                                         self.db_conn.rollback()
 
@@ -475,7 +491,7 @@ class WalmartBSRCrawler(BaseCrawler):
                     if (total_insert + total_update) >= target_products:
                         break
 
-                time.sleep(30)
+                time.sleep(random.uniform(28, 32))
                 page_num += 1
 
             print(f"[DONE] Page: {page_num}, Update: {total_update}, Insert: {total_insert}, batch_id: {self.batch_id}")
