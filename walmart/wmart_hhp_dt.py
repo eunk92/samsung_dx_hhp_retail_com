@@ -312,29 +312,35 @@ class WalmartDetailCrawler(BaseCrawler):
             hhp_color = None
 
             try:
-                spec_button = self.page.locator("//button[@aria-label='View full specifications']").first
-                if spec_button.is_visible(timeout=5000):
-                    spec_button.scroll_into_view_if_needed()
-                    time.sleep(random.uniform(1, 2))
-                    spec_button.click()
+                spec_button_xpath = self.xpaths.get('spec_button', {}).get('xpath')
+                spec_close_button_xpath = self.xpaths.get('spec_close_button', {}).get('xpath')
 
-                    try:
-                        self.page.wait_for_selector("//button[@aria-label='Close']", timeout=5000, state='visible')
-                        time.sleep(random.uniform(0.5, 1.5))
-                    except Exception:
-                        time.sleep(random.uniform(1, 3))
-
-                    modal_html = self.page.content()
-                    modal_tree = html.fromstring(modal_html)
-
-                    hhp_carrier = self.safe_extract(modal_tree, 'hhp_carrier')
-                    hhp_storage = self.safe_extract(modal_tree, 'hhp_storage')
-                    hhp_color = self.safe_extract(modal_tree, 'hhp_color')
-
-                    close_button = self.page.locator("//button[@aria-label='Close']").first
-                    if close_button.is_visible(timeout=3000):
-                        close_button.click()
+                if spec_button_xpath:
+                    spec_button = self.page.locator(spec_button_xpath).first
+                    if spec_button.is_visible(timeout=5000):
+                        spec_button.scroll_into_view_if_needed()
                         time.sleep(random.uniform(1, 2))
+                        spec_button.click()
+
+                        try:
+                            if spec_close_button_xpath:
+                                self.page.wait_for_selector(spec_close_button_xpath, timeout=5000, state='visible')
+                            time.sleep(random.uniform(0.5, 1.5))
+                        except Exception:
+                            time.sleep(random.uniform(1, 3))
+
+                        modal_html = self.page.content()
+                        modal_tree = html.fromstring(modal_html)
+
+                        hhp_carrier = self.safe_extract(modal_tree, 'hhp_carrier')
+                        hhp_storage = self.safe_extract(modal_tree, 'hhp_storage')
+                        hhp_color = self.safe_extract(modal_tree, 'hhp_color')
+
+                        if spec_close_button_xpath:
+                            close_button = self.page.locator(spec_close_button_xpath).first
+                            if close_button.is_visible(timeout=3000):
+                                close_button.click()
+                                time.sleep(random.uniform(1, 2))
             except Exception:
                 hhp_carrier = self.safe_extract(tree, 'hhp_carrier')
                 hhp_storage = self.safe_extract(tree, 'hhp_storage')
@@ -428,13 +434,11 @@ class WalmartDetailCrawler(BaseCrawler):
                 current_position = 0
                 scroll_step = 400
 
-                reviews_button_xpaths = [
-                    reviews_button_xpath,
-                    '//button[contains(., "See all reviews")]',
-                    '//a[contains(., "See all reviews")]',
-                    '//button[contains(text(), "reviews")]',
-                    '//a[contains(text(), "reviews")]'
-                ]
+                # fallback XPath 로드 (|로 구분된 문자열)
+                reviews_button_fallback = self.xpaths.get('reviews_button_fallback', {}).get('xpath', '')
+                fallback_xpaths = reviews_button_fallback.split('|') if reviews_button_fallback else []
+
+                reviews_button_xpaths = [reviews_button_xpath] + fallback_xpaths
 
                 while current_position < scroll_height:
                     for xpath in reviews_button_xpaths:
@@ -506,7 +510,10 @@ class WalmartDetailCrawler(BaseCrawler):
 
                                 try:
                                     next_page_num = current_page + 1
-                                    next_page_xpath = f'//a[@data-automation-id="page-number" and text()="{next_page_num}"]'
+                                    review_pagination_template = self.xpaths.get('review_pagination', {}).get('xpath', '')
+                                    if not review_pagination_template:
+                                        break
+                                    next_page_xpath = review_pagination_template.replace('{page_num}', str(next_page_num))
                                     next_page_button = self.page.locator(next_page_xpath).first
 
                                     if next_page_button.is_visible(timeout=3000):
