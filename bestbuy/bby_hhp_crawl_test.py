@@ -125,7 +125,7 @@ class BestBuyIntegratedCrawlerTest:
             # STEP 4: Detail
             print(f"\n[STEP 4/4] Detail Crawler...")
             try:
-                crawl_results['detail'] = BestBuyDetailCrawler(batch_id=self.batch_id).run()
+                crawl_results['detail'] = BestBuyDetailCrawler(batch_id=self.batch_id, test_mode=True).run()
             except Exception as e:
                 print(f"[ERROR] Detail: {e}")
                 crawl_results['detail'] = False

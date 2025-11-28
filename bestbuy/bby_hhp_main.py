@@ -24,6 +24,7 @@ BestBuy Main 페이지 크롤러
 import sys
 import os
 import time
+import random
 import traceback
 from datetime import datetime
 from lxml import html
@@ -60,27 +61,44 @@ class BestBuyMainCrawler(BaseCrawler):
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 1개월 전 로그 정리"""
+        # 1. DB 연결
         if not self.connect_db():
+            print("[ERROR] Initialize failed: DB connection failed")
             return False
+
+        # 2. XPath 로드
         if not self.load_xpaths(self.account_name, self.page_type):
+            print(f"[ERROR] Initialize failed: XPath load failed (account={self.account_name}, page_type={self.page_type})")
             return False
+
+        # 3. URL 템플릿 로드
         self.url_template = self.load_page_urls(self.account_name, self.page_type)
         if not self.url_template:
+            print(f"[ERROR] Initialize failed: URL template load failed (account={self.account_name}, page_type={self.page_type})")
             return False
-        self.setup_driver()
 
+        # 4. WebDriver 설정
+        try:
+            self.setup_driver()
+        except Exception as e:
+            print(f"[ERROR] Initialize failed: WebDriver setup failed - {e}")
+            traceback.print_exc()
+            return False
+
+        # 5. batch_id 생성
         if not self.batch_id:
             self.batch_id = self.generate_batch_id(self.account_name)
 
+        # 6. calendar_week 생성 및 로그 정리
         self.calendar_week = self.generate_calendar_week()
         self.cleanup_old_logs()
 
+        print(f"[INFO] Initialize completed: batch_id={self.batch_id}, calendar_week={self.calendar_week}")
         return True
 
     def scroll_to_bottom(self):
-        """스크롤: 300px씩 점진적 스크롤 → 페이지네이션 보이면 종료"""
+        """스크롤: 205~350px씩 점진적 스크롤 → 페이지네이션 보이면 종료"""
         try:
-            scroll_step = 300
             current_position = 0
 
             for _ in range(50):
@@ -94,15 +112,16 @@ class BestBuyMainCrawler(BaseCrawler):
                 if is_pagination_visible:
                     break
 
+                scroll_step = random.randint(205, 350)
                 current_position += scroll_step
                 self.driver.execute_script(f"window.scrollTo(0, {current_position});")
-                time.sleep(3)
+                time.sleep(random.uniform(0.5, 0.7))
 
                 total_height = self.driver.execute_script("return document.body.scrollHeight")
                 if current_position >= total_height:
                     break
 
-            time.sleep(2)
+            time.sleep(random.uniform(0, 4))
 
         except Exception as e:
             print(f"[ERROR] Scroll failed: {e}")
@@ -119,10 +138,10 @@ class BestBuyMainCrawler(BaseCrawler):
                 return []
 
             self.driver.get(url)
-            time.sleep(10)
+            time.sleep(random.uniform(8, 12))
 
             self.scroll_to_bottom()
-            time.sleep(30)
+            time.sleep(random.uniform(28, 32))
 
             base_containers = []
             expected_products = 24
@@ -136,7 +155,7 @@ class BestBuyMainCrawler(BaseCrawler):
                     break
 
                 if attempt < 3:
-                    time.sleep(10)
+                    time.sleep(random.uniform(8, 12))
 
             products = []
             for idx, item in enumerate(base_containers, 1):
@@ -260,6 +279,8 @@ class BestBuyMainCrawler(BaseCrawler):
                                     total_saved += 1
                                 except Exception as single_error:
                                     print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
+                                    query = cursor.mogrify(insert_query, product_to_tuple(single_product))
+                                    print(f"[DEBUG] Query:\n{query.decode('utf-8')}")
                                     traceback.print_exc()
                                     self.db_conn.rollback()
 
@@ -299,7 +320,7 @@ class BestBuyMainCrawler(BaseCrawler):
                     if total_products >= target_products:
                         break
 
-                time.sleep(30)
+                time.sleep(random.uniform(28, 32))
                 page_num += 1
 
             print(f"[DONE] Page: {page_num}, Saved: {total_products}, batch_id: {self.batch_id}")

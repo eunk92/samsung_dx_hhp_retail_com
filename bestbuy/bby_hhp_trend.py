@@ -23,6 +23,8 @@ BestBuy Trend 페이지 크롤러
 import sys
 import os
 import time
+import random
+import traceback
 from datetime import datetime
 from lxml import html
 
@@ -82,7 +84,7 @@ class BestBuyTrendCrawler(BaseCrawler):
                 return []
 
             self.driver.get(url)
-            time.sleep(30)
+            time.sleep(random.uniform(25, 35))
 
             base_containers = []
             expected_products = 10
@@ -96,7 +98,7 @@ class BestBuyTrendCrawler(BaseCrawler):
                     break
 
                 if attempt < 3:
-                    time.sleep(10)
+                    time.sleep(random.uniform(8, 12))
 
             target_products = self.test_count if self.test_mode else len(base_containers)
             containers_to_process = base_containers[:target_products]
@@ -141,7 +143,7 @@ class BestBuyTrendCrawler(BaseCrawler):
     def save_products(self, products):
         """DB 저장: 중복 확인 → UPDATE(기존) / INSERT(신규) → 3-tier retry"""
         if not products:
-            return 0
+            return {'insert': 0, 'update': 0}
 
         try:
             cursor = self.db_conn.cursor()
@@ -245,15 +247,18 @@ class BestBuyTrendCrawler(BaseCrawler):
                                         insert_count += 1
                                     except Exception as single_error:
                                         print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
+                                        query = cursor.mogrify(insert_query, product_to_tuple(single_product))
+                                        print(f"[DEBUG] Query:\n{query.decode('utf-8')}")
+                                        traceback.print_exc()
                                         self.db_conn.rollback()
 
             cursor.close()
-            return insert_count + update_count
+            return {'insert': insert_count, 'update': update_count}
 
         except Exception as e:
             print(f"[ERROR] Failed to save products: {e}")
             traceback.print_exc()
-            return 0
+            return {'insert': 0, 'update': 0}
 
     def run(self):
         """실행: initialize() → crawl_page() → save_products() → 리소스 정리"""
@@ -269,9 +274,9 @@ class BestBuyTrendCrawler(BaseCrawler):
                 print("[ERROR] No products found")
                 return False
 
-            saved_count = self.save_products(products)
+            result = self.save_products(products)
 
-            print(f"[DONE] Saved: {saved_count}, batch_id: {self.batch_id}")
+            print(f"[DONE] Update: {result['update']}, Insert: {result['insert']}, batch_id: {self.batch_id}")
             return True
 
         except Exception as e:

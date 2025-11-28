@@ -74,9 +74,8 @@ class BestBuyBSRCrawler(BaseCrawler):
         return True
 
     def scroll_to_bottom(self):
-        """스크롤: 300px씩 점진적 스크롤 → 페이지네이션 보이면 종료"""
+        """스크롤: 205~350px씩 점진적 스크롤 → 페이지네이션 보이면 종료"""
         try:
-            scroll_step = 300
             current_position = 0
 
             for _ in range(50):
@@ -90,9 +89,10 @@ class BestBuyBSRCrawler(BaseCrawler):
                 if is_pagination_visible:
                     break
 
+                scroll_step = random.randint(205, 350)
                 current_position += scroll_step
                 self.driver.execute_script(f"window.scrollTo(0, {current_position});")
-                time.sleep(3)
+                time.sleep(random.uniform(0.5, 0.7))
 
                 total_height = self.driver.execute_script("return document.body.scrollHeight")
                 if current_position >= total_height:
@@ -295,6 +295,8 @@ class BestBuyBSRCrawler(BaseCrawler):
                                         insert_count += 1
                                     except Exception as single_error:
                                         print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
+                                        query = cursor.mogrify(insert_query, product_to_tuple(single_product))
+                                        print(f"[DEBUG] Query:\n{query.decode('utf-8')}")
                                         traceback.print_exc()
                                         self.db_conn.rollback()
 

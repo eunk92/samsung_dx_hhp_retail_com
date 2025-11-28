@@ -46,17 +46,19 @@ class BestBuyDetailCrawler(BaseCrawler):
     BestBuy Detail 페이지 크롤러
     """
 
-    def __init__(self, batch_id=None):
-        """초기화. batch_id: 통합 크롤러에서 전달"""
+    def __init__(self, batch_id=None, test_mode=False):
+        """초기화. batch_id: 통합 크롤러에서 전달, test_mode: 테스트 모드 여부"""
         super().__init__()
         self.account_name = 'Bestbuy'
         self.page_type = 'detail'
         self.batch_id = batch_id
-        # 테스트 모드: batch_id가 전달되지 않으면 테스트 테이블 사용
-        self.test_mode = batch_id is None
+        self.test_mode = test_mode
+        # batch_id 없으면 개별 실행
+        self.standalone = batch_id is None
 
     def initialize(self):
         """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
+        # batch_id 없으면 기본값 사용
         if not self.batch_id:
             self.batch_id = 'b_20251127_090753'
 
@@ -240,12 +242,13 @@ class BestBuyDetailCrawler(BaseCrawler):
 
                         # 스펙 모달창 닫기
                         try:
-                            close_button_xpath = "//button[@data-testid='brix-sheet-closeButton' or @aria-label='Close Sheet']"
-                            close_button = WebDriverWait(self.driver, 5).until(
-                                EC.element_to_be_clickable((By.XPATH, close_button_xpath))
-                            )
-                            close_button.click()
-                            time.sleep(1)
+                            close_button_xpath = self.xpaths.get('close_button', {}).get('xpath')
+                            if close_button_xpath:
+                                close_button = WebDriverWait(self.driver, 5).until(
+                                    EC.element_to_be_clickable((By.XPATH, close_button_xpath))
+                                )
+                                close_button.click()
+                                time.sleep(1)
                         except Exception:
                             try:
                                 from selenium.webdriver.common.keys import Keys
@@ -264,7 +267,6 @@ class BestBuyDetailCrawler(BaseCrawler):
             if similar_products_container_xpath:
                 similar_products_found = False
                 current_scroll = self.driver.execute_script("return window.pageYOffset;")
-                scroll_step = 400
                 page_height = self.driver.execute_script("return document.body.scrollHeight")
 
                 while current_scroll < page_height:
@@ -278,9 +280,10 @@ class BestBuyDetailCrawler(BaseCrawler):
                     except Exception:
                         pass
 
+                    scroll_step = random.randint(205, 350)
                     current_scroll += scroll_step
                     self.driver.execute_script(f"window.scrollTo(0, {current_scroll});")
-                    time.sleep(1)
+                    time.sleep(random.uniform(0.5, 0.7))
 
                 if similar_products_found:
                     time.sleep(1)
@@ -391,15 +394,11 @@ class BestBuyDetailCrawler(BaseCrawler):
 
                 scroll_height = self.driver.execute_script("return document.body.scrollHeight")
                 current_position = 0
-                scroll_step = 400
 
-                reviews_button_xpaths = [
-                    reviews_button_xpath,
-                    '//button[contains(., "See All Customer Reviews")]',
-                    '//a[contains(., "See All Customer Reviews")]',
-                    '//button[contains(@class, "Op9coqeII1kYHR9Q")]',
-                    '//a[contains(text(), "reviews")]'
-                ]
+                # reviews_button + fallback XPaths
+                fallback_str = self.xpaths.get('reviews_button_fallback', {}).get('xpath') or ''
+                fallback_xpaths = [x.strip() for x in fallback_str.split('|||') if x.strip()]
+                reviews_button_xpaths = [reviews_button_xpath] + fallback_xpaths
 
                 while current_position < scroll_height:
                     for xpath in reviews_button_xpaths:
@@ -424,9 +423,10 @@ class BestBuyDetailCrawler(BaseCrawler):
                     if review_button_found:
                         break
 
+                    scroll_step = random.randint(205, 350)
                     current_position += scroll_step
                     self.driver.execute_script(f"window.scrollTo(0, {current_position});")
-                    time.sleep(0.5)
+                    time.sleep(random.uniform(0.5, 0.7))
 
                 if review_button_found:
                     try:
@@ -469,7 +469,8 @@ class BestBuyDetailCrawler(BaseCrawler):
                 'hhp_carrier': hhp_carrier[:200] if hhp_carrier else None,
                 'detailed_review_content': detailed_review_content,
                 'top_mentions': top_mentions,
-                'retailer_sku_name_similar': retailer_sku_name_similar
+                'retailer_sku_name_similar': retailer_sku_name_similar,
+                'crawl_strdatetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
 
             return combined_data
@@ -485,7 +486,6 @@ class BestBuyDetailCrawler(BaseCrawler):
 
         try:
             cursor = self.db_conn.cursor()
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
             # 테스트 모드면 test_hhp_retail_com, 통합 크롤러면 hhp_retail_com
             table_name = 'test_hhp_retail_com' if self.test_mode else 'hhp_retail_com'
@@ -532,7 +532,7 @@ class BestBuyDetailCrawler(BaseCrawler):
                     product.get('retailer_sku_name_similar'),
                     product.get('main_rank'), product.get('bsr_rank'), product.get('trend_rank'),
                     product.get('promotion_type'),
-                    product.get('calendar_week'), current_time, self.batch_id
+                    product.get('calendar_week'), product.get('crawl_strdatetime'), self.batch_id
                 )
 
             for batch_start in range(0, len(products), BATCH_SIZE):
@@ -555,6 +555,8 @@ class BestBuyDetailCrawler(BaseCrawler):
                             saved_count += 1
                         except Exception as single_error:
                             print(f"[ERROR] DB save failed: {single_product.get('item')}: {single_error}")
+                            query = cursor.mogrify(insert_query, product_to_tuple(single_product))
+                            print(f"[DEBUG] Query:\n{query.decode('utf-8')}")
                             traceback.print_exc()
                             self.db_conn.rollback()
                             continue
@@ -621,11 +623,13 @@ class BestBuyDetailCrawler(BaseCrawler):
                 self.driver.quit()
             if self.db_conn:
                 self.db_conn.close()
+            if self.standalone:
+                input("Press Enter to exit...")
 
 
 def main():
-    """개별 실행 진입점 (기본 배치 ID 사용)"""
-    crawler = BestBuyDetailCrawler()
+    """개별 실행 진입점 (테스트 모드, 기본 배치 ID 사용)"""
+    crawler = BestBuyDetailCrawler(batch_id=None, test_mode=True)
     crawler.run()
 
 
