@@ -163,6 +163,71 @@ class WalmartDetailCrawler(BaseCrawler):
             print(f"[WARNING] CAPTCHA check failed: {e}")
             return True
 
+    def close_banner(self):
+        """배너 감지 및 닫기 (회색 배경 div 감지 시 우측 클릭)
+
+        Note: Playwright locator는 브라우저의 라이브 DOM에 직접 접근하므로
+              lxml HTML 파싱 없이도 요소 감지 가능
+        """
+        try:
+            banner_xpath = self.xpaths.get('banner', {}).get('xpath')
+            if not banner_xpath:
+                return
+            # Playwright locator: 라이브 DOM에서 직접 요소 탐색 (lxml 파싱 불필요)
+            banner = self.page.locator(banner_xpath).first
+            if banner.is_visible(timeout=2000):
+                print("[INFO] 배너 감지됨, 닫기 시도...")
+                viewport = self.page.viewport_size
+                if viewport:
+                    # 화면 우측 절반의 중앙 클릭
+                    click_x = viewport['width'] * 0.75
+                    click_y = viewport['height'] * 0.5
+                    self.page.mouse.click(click_x, click_y)
+                    time.sleep(random.uniform(0.5, 1))
+                    print("[OK] 배너 닫기 완료")
+        except Exception:
+            pass
+
+    def extract_item(self, product_url):
+        """URL에서 item ID 추출"""
+        if not product_url:
+            return None
+        try:
+            # /ip/product-name/12345 패턴
+            ip_match = re.search(r'/ip/[^/]+/(\d+)', product_url)
+            if ip_match:
+                return ip_match.group(1)
+            # URL 인코딩된 패턴 %2F12345%3F
+            encoded_match = re.search(r'%2F(\d+)%3F', product_url)
+            if encoded_match:
+                return encoded_match.group(1)
+            # URL 마지막 세그먼트에서 숫자 추출
+            last_segment = product_url.rstrip('/').split('/')[-1]
+            item_with_params = last_segment.split('?')[0]
+            number_match = re.search(r'(\d+)$', item_with_params)
+            if number_match:
+                return number_match.group(1)
+        except Exception as e:
+            print(f"[WARNING] Failed to extract item: {e}")
+            traceback.print_exc()
+        return None
+
+    def scroll_to_bottom(self):
+        """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
+        try:
+            scroll_step = 300
+            current_position = 0
+            while True:
+                current_position += scroll_step
+                self.page.evaluate(f"window.scrollTo(0, {current_position});")
+                time.sleep(random.uniform(0.3, 0.5))
+                total_height = self.page.evaluate("document.body.scrollHeight")
+                if current_position >= total_height:
+                    break
+            time.sleep(random.uniform(1, 2))
+        except Exception as e:
+            print(f"[WARNING] Scroll failed: {e}")
+
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → Playwright 설정 → batch_id 설정"""
         # 1. DB 연결
@@ -182,7 +247,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
         # 4. batch_id 설정
         if not self.batch_id:
-            self.batch_id = 'w_20251127_123456'
+            self.batch_id = 'w_20251128_094211'
 
         print(f"[INFO] Initialize completed: batch_id={self.batch_id}")
         return True
@@ -256,35 +321,24 @@ class WalmartDetailCrawler(BaseCrawler):
             except Exception:
                 pass
 
-            time.sleep(random.uniform(2, 3))
+            time.sleep(random.uniform(1, 3))
 
             if first_product:
                 if not self.handle_captcha():
                     print("[WARNING] CAPTCHA handling failed")
                 time.sleep(random.uniform(3, 5))
 
+            # 전체 콘텐츠 로드: 하단까지 스크롤 → 배너 닫기 → 맨 위로 복귀
+            self.scroll_to_bottom()
+            self.close_banner()
+            self.page.evaluate("window.scrollTo(0, 0);")
+            time.sleep(random.uniform(0.5, 1))
+
             page_html = self.page.content()
             tree = html.fromstring(page_html)
 
             # item ID 추출
-            item = None
-            try:
-                if product_url:
-                    ip_match = re.search(r'/ip/[^/]+/(\d+)', product_url)
-                    if ip_match:
-                        item = ip_match.group(1)
-                    else:
-                        encoded_match = re.search(r'%2F(\d+)%3F', product_url)
-                        if encoded_match:
-                            item = encoded_match.group(1)
-                        else:
-                            last_segment = product_url.rstrip('/').split('/')[-1]
-                            item_with_params = last_segment.split('?')[0]
-                            number_match = re.search(r'(\d+)$', item_with_params)
-                            if number_match:
-                                item = number_match.group(1)
-            except Exception as e:
-                print(f"[WARNING] Failed to extract item: {e}")
+            item = self.extract_item(product_url)
 
             # 추가 필드 추출
             number_of_ppl_purchased_yesterday = self.safe_extract(tree, 'number_of_ppl_purchased_yesterday')
@@ -316,8 +370,31 @@ class WalmartDetailCrawler(BaseCrawler):
                 spec_close_button_xpath = self.xpaths.get('spec_close_button', {}).get('xpath')
 
                 if spec_button_xpath:
-                    spec_button = self.page.locator(spec_button_xpath).first
-                    if spec_button.is_visible(timeout=5000):
+                    spec_button_found = False
+                    spec_button = None
+                    for retry in range(3):
+                        # 100px씩 스크롤하며 spec_button 찾기
+                        for _ in range(3):
+                            try:
+                                spec_button = self.page.locator(spec_button_xpath).first
+                                if spec_button.is_visible(timeout=1000):
+                                    spec_button_found = True
+                                    break
+                            except:
+                                pass
+                            self.page.evaluate("window.scrollBy(0, 100);")
+                            time.sleep(random.uniform(0.3, 0.5))
+
+                        if spec_button_found:
+                            break
+                        else:
+                            print(f"[WARNING] spec_button 찾기 실패 (시도 {retry + 1}/3)")
+                            time.sleep(random.uniform(1, 2))
+                            # HTML 다시 파싱
+                            page_html = self.page.content()
+                            tree = html.fromstring(page_html)
+
+                    if spec_button_found:
                         spec_button.scroll_into_view_if_needed()
                         time.sleep(random.uniform(1, 2))
                         spec_button.click()
@@ -327,6 +404,8 @@ class WalmartDetailCrawler(BaseCrawler):
                                 self.page.wait_for_selector(spec_close_button_xpath, timeout=5000, state='visible')
                             time.sleep(random.uniform(0.5, 1.5))
                         except Exception:
+                            print(f"[ERROR] spec_buttspec_close_button 처리 실패: {e}")
+                            traceback.print_exc()
                             time.sleep(random.uniform(1, 3))
 
                         modal_html = self.page.content()
@@ -341,10 +420,9 @@ class WalmartDetailCrawler(BaseCrawler):
                             if close_button.is_visible(timeout=3000):
                                 close_button.click()
                                 time.sleep(random.uniform(1, 2))
-            except Exception:
-                hhp_carrier = self.safe_extract(tree, 'hhp_carrier')
-                hhp_storage = self.safe_extract(tree, 'hhp_storage')
-                hhp_color = self.safe_extract(tree, 'hhp_color')
+            except Exception as e:
+                print(f"[ERROR] spec_button 처리 실패: {e}")
+                traceback.print_exc()
 
             # 유사 제품 추출
             retailer_sku_name_similar = None
