@@ -215,12 +215,12 @@ class WalmartDetailCrawler(BaseCrawler):
     def scroll_to_bottom(self):
         """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
         try:
-            scroll_step = 300
             current_position = 0
             while True:
+                scroll_step = random.randint(250, 350)
                 current_position += scroll_step
                 self.page.evaluate(f"window.scrollTo(0, {current_position});")
-                time.sleep(random.uniform(0.3, 0.5))
+                time.sleep(random.uniform(0.5, 0.7))
                 total_height = self.page.evaluate("document.body.scrollHeight")
                 if current_position >= total_height:
                     break
@@ -432,11 +432,10 @@ class WalmartDetailCrawler(BaseCrawler):
                 try:
                     scroll_height = self.page.evaluate("document.body.scrollHeight")
                     current_position = 0
-                    scroll_step = 500
 
                     while current_position < scroll_height:
                         self.page.evaluate(f"window.scrollTo(0, {current_position});")
-                        time.sleep(0.5)
+                        time.sleep(random.uniform(0.5, 0.7))
 
                         try:
                             similar_section = self.page.locator(similar_products_container_xpath).first
@@ -447,6 +446,7 @@ class WalmartDetailCrawler(BaseCrawler):
                         except:
                             pass
 
+                        scroll_step = random.randint(205, 350)
                         current_position += scroll_step
 
                     page_html = self.page.content()
@@ -510,7 +510,6 @@ class WalmartDetailCrawler(BaseCrawler):
 
                 scroll_height = self.page.evaluate("document.body.scrollHeight")
                 current_position = 0
-                scroll_step = 400
 
                 # fallback XPath 로드 (|로 구분된 문자열)
                 reviews_button_fallback = self.xpaths.get('reviews_button_fallback', {}).get('xpath', '')
@@ -539,9 +538,10 @@ class WalmartDetailCrawler(BaseCrawler):
                     if review_button_found:
                         break
 
+                    scroll_step = random.randint(250, 350)
                     current_position += scroll_step
                     self.page.evaluate(f"window.scrollTo(0, {current_position});")
-                    time.sleep(0.5)
+                    time.sleep(random.uniform(0.5, 0.7))
 
                 if review_button_found:
                     try:

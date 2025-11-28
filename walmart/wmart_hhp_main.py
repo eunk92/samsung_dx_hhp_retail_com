@@ -257,15 +257,15 @@ class WalmartMainCrawler(BaseCrawler):
         return True
 
     def scroll_to_bottom(self):
-        """스크롤: 300px씩 점진적 스크롤 → 페이지 하단까지 진행"""
+        """스크롤: 250~350px씩 점진적 스크롤 → 페이지 하단까지 진행"""
         try:
-            scroll_step = 300
             current_position = 0
 
             while True:
+                scroll_step = random.randint(250, 350)
                 current_position += scroll_step
                 self.page.evaluate(f"window.scrollTo(0, {current_position});")
-                time.sleep(random.uniform(0.3, 0.7))
+                time.sleep(random.uniform(0.5, 0.7))
 
                 total_height = self.page.evaluate("document.body.scrollHeight")
                 if current_position >= total_height:
