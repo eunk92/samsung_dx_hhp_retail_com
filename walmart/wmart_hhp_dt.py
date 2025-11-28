@@ -551,7 +551,8 @@ class WalmartDetailCrawler(BaseCrawler):
                 'hhp_color': hhp_color,
                 'hhp_carrier': hhp_carrier,
                 'retailer_sku_name_similar': retailer_sku_name_similar,
-                'detailed_review_content': detailed_review_content
+                'detailed_review_content': detailed_review_content,
+                'crawl_strdatetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
 
             return combined_data
@@ -568,7 +569,6 @@ class WalmartDetailCrawler(BaseCrawler):
 
         try:
             cursor = self.db_conn.cursor()
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
             # 테스트 모드면 test_hhp_retail_com, 통합 크롤러면 hhp_retail_com
             table_name = 'test_hhp_retail_com' if self.test_mode else 'hhp_retail_com'
@@ -622,7 +622,7 @@ class WalmartDetailCrawler(BaseCrawler):
                     product.get('retailer_sku_name_similar'),
                     product.get('detailed_review_content'),
                     product.get('main_rank'), product.get('bsr_rank'),
-                    product.get('calendar_week'), current_time, self.batch_id
+                    product.get('calendar_week'), product.get('crawl_strdatetime'), self.batch_id
                 )
 
             def save_batch(batch_products):
