@@ -204,8 +204,25 @@ class AmazonMainCrawler(BaseCrawler):
 
         return False
 
+    def scroll_to_bottom(self):
+        """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
+        try:
+            scroll_step = 300
+            current_position = 0
+            while True:
+                current_position += scroll_step
+                self.driver.execute_script(f"window.scrollTo(0, {current_position});")
+                time.sleep(random.uniform(0.3, 0.5))
+                total_height = self.driver.execute_script("return document.body.scrollHeight")
+                if current_position >= total_height:
+                    break
+            time.sleep(random.uniform(1, 2))
+        except Exception as e:
+            print(f"[WARNING] Scroll failed: {e}")
+            traceback.print_exc()
+
     def crawl_page(self, page_number):
-        """페이지 크롤링: 페이지 로드 → HTML 파싱 → 제품 데이터 추출"""
+        """페이지 크롤링: 페이지 로드 → 파싱 → 16개 미만시 스크롤/대기 후 재시도 → 제품 데이터 추출"""
         try:
             url = self.url_template.replace('{page}', str(page_number))
 
@@ -230,9 +247,29 @@ class AmazonMainCrawler(BaseCrawler):
             # 추가 대기 (봇 감지 후 안정화)
             time.sleep(random.uniform(3, 5))
 
-            page_html = self.driver.page_source
-            tree = html.fromstring(page_html)
-            base_containers = tree.xpath(base_container_xpath)
+            # 16개 검증 (최대 3회 재시도: 파싱 → 스크롤 → 대기 후 재파싱)
+            base_containers = []
+            expected_products = 16
+
+            for attempt in range(1, 4):
+                page_html = self.driver.page_source
+                tree = html.fromstring(page_html)
+                base_containers = tree.xpath(base_container_xpath)
+
+                if len(base_containers) >= expected_products:
+                    break
+
+                if attempt == 1:
+                    # 1차 실패: 스크롤 후 재시도
+                    print(f"[WARNING] Page {page_number}: {len(base_containers)}/{expected_products} products, scrolling...")
+                    self.scroll_to_bottom()
+                    time.sleep(random.uniform(3, 5))
+                elif attempt == 2:
+                    # 2차 실패: 대기 후 재시도
+                    print(f"[WARNING] Page {page_number}: {len(base_containers)}/{expected_products} products, waiting...")
+                    time.sleep(random.uniform(5, 8))
+
+            print(f"[INFO] Page {page_number}: {len(base_containers)} products found")
 
             products = []
             for idx, item in enumerate(base_containers, 1):
