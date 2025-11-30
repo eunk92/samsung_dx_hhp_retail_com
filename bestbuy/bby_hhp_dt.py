@@ -312,6 +312,7 @@ class BestBuyDetailCrawler(BaseCrawler):
             # ========== 4단계: 리뷰 섹션 데이터 추출 (최대 3회 재시도) ==========
             # 리뷰 없음 텍스트 패턴
             NO_REVIEWS_TEXTS = ['not yet reviewed']
+            NO_REVIEWS_VALUE = "Not yet reviewed"
 
             star_rating = None
             count_of_reviews = None
@@ -319,67 +320,72 @@ class BestBuyDetailCrawler(BaseCrawler):
             top_mentions = None
             recommendation_intent = None
 
-            MAX_RETRY = 3
-            for attempt in range(1, MAX_RETRY + 1):
-                page_html = self.driver.page_source
-                tree = html.fromstring(page_html)
+            # 리뷰 없음 여부 먼저 판별
+            is_no_reviews = top_count_of_reviews and any(t in top_count_of_reviews.lower() for t in NO_REVIEWS_TEXTS)
 
-                if count_of_reviews is None:
-                    if top_count_of_reviews:
-                        if any(t in top_count_of_reviews.lower() for t in NO_REVIEWS_TEXTS):
-                            count_of_reviews = "0"
-                        else:
+            if is_no_reviews:
+                # 리뷰 없음 → 일괄 할당
+                count_of_reviews = "0"
+                star_rating = data_extractor.extract_rating(top_star_rating) if top_star_rating else NO_REVIEWS_VALUE
+                count_of_star_ratings = NO_REVIEWS_VALUE
+            else:
+                # 리뷰 있음 → 추출 로직
+                MAX_RETRY = 3
+                for attempt in range(1, MAX_RETRY + 1):
+                    page_html = self.driver.page_source
+                    tree = html.fromstring(page_html)
+
+                    if count_of_reviews is None:
+                        if top_count_of_reviews:
                             count_of_reviews = data_extractor.extract_review_count(top_count_of_reviews)
+                        else:
+                            count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
+                            count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
+
+                    if star_rating is None:
+                        if top_star_rating:
+                            star_rating = data_extractor.extract_rating(top_star_rating)
+                        else:
+                            star_rating_raw = self.safe_extract(tree, 'star_rating')
+                            star_rating = data_extractor.extract_rating(star_rating_raw)
+
+                    if count_of_star_ratings is None:
+                        count_of_star_ratings = data_extractor.extract_star_ratings_count(
+                            tree,
+                            count_of_reviews,
+                            self.xpaths.get('count_of_star_ratings', {}).get('xpath'),
+                            self.account_name
+                        )
+
+                    if top_mentions is None:
+                        top_mentions = self.safe_extract(tree, 'top_mentions')
+
+                    if recommendation_intent is None:
+                        recommendation_intent_raw = self.safe_extract(tree, 'recommendation_intent')
+                        recommendation_intent = (recommendation_intent_raw + " would recommend to a friend") if recommendation_intent_raw else None
+
+                    # 필수 필드 모두 추출 성공하면 종료
+                    if star_rating and count_of_reviews and count_of_star_ratings:
+                        if attempt > 1:
+                            print(f"[INFO] 리뷰 데이터 추출 완료 (시도 {attempt}/{MAX_RETRY})")
+                        break
+
+                    # 재시도 필요
+                    if attempt < MAX_RETRY:
+                        missing = []
+                        if not star_rating: missing.append('star_rating')
+                        if not count_of_reviews: missing.append('count_of_reviews')
+                        if not count_of_star_ratings: missing.append('count_of_star_ratings')
+                        print(f"[WARNING] 리뷰 데이터 불완전 (시도 {attempt}/{MAX_RETRY}) - 미추출: {', '.join(missing)}")
+                        time.sleep(2)
                     else:
-                        count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
-                        count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
-
-                if star_rating is None:
-                    if top_count_of_reviews and any(t in top_count_of_reviews.lower() for t in NO_REVIEWS_TEXTS):
-                        star_rating = "Not yet reviewed"
-                    elif top_star_rating:
-                        star_rating = data_extractor.extract_rating(top_star_rating)
-                    else:
-                        star_rating_raw = self.safe_extract(tree, 'star_rating')
-                        star_rating = data_extractor.extract_rating(star_rating_raw)
-
-                if count_of_star_ratings is None:
-                    count_of_star_ratings = data_extractor.extract_star_ratings_count(
-                        tree,
-                        count_of_reviews,
-                        self.xpaths.get('count_of_star_ratings', {}).get('xpath'),
-                        self.account_name
-                    )
-
-                if top_mentions is None:
-                    top_mentions = self.safe_extract(tree, 'top_mentions')
-
-                if recommendation_intent is None:
-                    recommendation_intent_raw = self.safe_extract(tree, 'recommendation_intent')
-                    recommendation_intent = (recommendation_intent_raw + " would recommend to a friend") if recommendation_intent_raw else None
-
-                # 필수 필드 모두 추출 성공하면 종료
-                if star_rating and count_of_reviews and count_of_star_ratings:
-                    if attempt > 1:
-                        print(f"[INFO] 리뷰 데이터 추출 완료 (시도 {attempt}/{MAX_RETRY})")
-                    break
-
-                # 재시도 필요
-                if attempt < MAX_RETRY:
-                    missing = []
-                    if not star_rating: missing.append('star_rating')
-                    if not count_of_reviews: missing.append('count_of_reviews')
-                    if not count_of_star_ratings: missing.append('count_of_star_ratings')
-                    print(f"[WARNING] 리뷰 데이터 불완전 (시도 {attempt}/{MAX_RETRY}) - 미추출: {', '.join(missing)}")
-                    time.sleep(2)
-                else:
-                    # 마지막 시도에서도 실패
-                    missing = []
-                    if not star_rating: missing.append('star_rating')
-                    if not count_of_reviews: missing.append('count_of_reviews')
-                    if not count_of_star_ratings: missing.append('count_of_star_ratings')
-                    if missing:
-                        print(f"[WARNING] 리뷰 데이터 추출 실패 (시도 {attempt}/{MAX_RETRY}) - 미추출: {', '.join(missing)}")
+                        # 마지막 시도에서도 실패
+                        missing = []
+                        if not star_rating: missing.append('star_rating')
+                        if not count_of_reviews: missing.append('count_of_reviews')
+                        if not count_of_star_ratings: missing.append('count_of_star_ratings')
+                        if missing:
+                            print(f"[WARNING] 리뷰 데이터 추출 실패 (시도 {attempt}/{MAX_RETRY}) - 미추출: {', '.join(missing)}")
 
            
             # ========== 5단계: 리뷰 더보기 버튼 클릭 및 상세 리뷰 추출 ==========

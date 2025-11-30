@@ -347,6 +347,18 @@ class WalmartDetailCrawler(BaseCrawler):
             savings = self.safe_extract(tree, 'savings')
             discount_type = self.safe_extract(tree, 'discount_type')
 
+             # "No ratings yet" 체크 (리뷰 없는 상품)
+            no_ratings_yet = False
+            no_ratings_xpath = self.xpaths.get('no_ratings_yet', {}).get('xpath')
+            no_ratings_elements = tree.xpath(no_ratings_xpath) if no_ratings_xpath else []
+            if no_ratings_elements:
+                no_ratings_text = no_ratings_elements[0].text_content().strip()
+                # 괄호 제거 후 비교
+                no_ratings_text_clean = re.sub(r'\(.*?\)', '', no_ratings_text).strip()
+                if no_ratings_text_clean == 'No ratings yet':
+                    no_ratings_yet = True
+                    print("[INFO] No ratings yet 감지 - 리뷰 필드 스킵 예정")
+
             # shipping_info 추출
             shipping_info = None
             try:
@@ -471,32 +483,40 @@ class WalmartDetailCrawler(BaseCrawler):
                     pass
 
             # 리뷰 관련 필드
-            page_html = self.page.content()
-            tree = html.fromstring(page_html)
-
             count_of_reviews = None
-            try:
-                count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
-                count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
-            except Exception:
-                pass
-
             star_rating = None
-            try:
-                star_rating_raw = self.safe_extract(tree, 'star_rating')
-                star_rating = data_extractor.extract_rating(star_rating_raw)
-            except Exception:
-                pass
-
             count_of_star_ratings = None
-            try:
-                count_of_star_ratings = data_extractor.extract_star_ratings_count(
-                    tree, count_of_reviews,
-                    self.xpaths.get('count_of_star_ratings', {}).get('xpath'),
-                    self.account_name
-                )
-            except Exception:
-                pass
+
+            if no_ratings_yet:
+                # "No ratings yet" - 리뷰 없음
+                count_of_reviews = '0'
+                star_rating = 'No ratings yet'
+                count_of_star_ratings = 'No ratings yet'
+            else:
+                for retry in range(3):
+                    page_html = self.page.content()
+                    tree = html.fromstring(page_html)
+
+                    count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
+                    count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
+
+                    star_rating_raw = self.safe_extract(tree, 'star_rating')
+                    star_rating = data_extractor.extract_rating(star_rating_raw)
+
+                    count_of_star_ratings = data_extractor.extract_star_ratings_count(
+                        tree, count_of_reviews,
+                        self.xpaths.get('count_of_star_ratings', {}).get('xpath'),
+                        self.account_name
+                    )
+
+                    # 3개 필드 모두 추출 성공 시 종료
+                    if count_of_reviews is not None and star_rating is not None and count_of_star_ratings is not None:
+                        break
+
+                    # 실패 시 재시도 전 대기
+                    if retry < 2:
+                        print(f"[WARNING] 리뷰 필드 추출 실패 (시도 {retry + 1}/3) - 재시도 중...")
+                        time.sleep(random.uniform(1, 2))
 
             # 리뷰 상세 추출
             detailed_review_content = None

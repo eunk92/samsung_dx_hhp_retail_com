@@ -120,12 +120,12 @@ def get_no_reviews_text(account_name):
 
     Examples:
         - get_no_reviews_text("Amazon") → "No customer reviews"
-        - get_no_reviews_text("BestBuy") → "Not yet reviewed"
+        - get_no_reviews_text("Bestbuy") → "Not yet reviewed"
         - get_no_reviews_text("Walmart") → "No ratings yet"
     """
     no_reviews_mapping = {
         'Amazon': 'No customer reviews',
-        'BestBuy': 'Not yet reviewed',
+        'Bestbuy': 'Not yet reviewed',
         'Walmart': 'No ratings yet'
     }
 
@@ -265,7 +265,7 @@ def _extract_star_ratings_count_generic(tree, xpath, account_name):
                 count_clean = count_str.replace(',', '')
                 star_data.append(f"{star_names[i]}:{count_clean}")
 
-        return ','.join(star_data) if len(star_data) == 5 else get_no_reviews_text(account_name)
+        return ','.join(star_data) if len(star_data) == 5 else None
 
     except Exception as e:
         print(f"[WARNING] Failed to extract generic star ratings distribution: {e}")
