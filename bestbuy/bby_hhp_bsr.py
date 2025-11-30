@@ -24,6 +24,7 @@ import sys
 import os
 import time
 import traceback
+import random
 from datetime import datetime
 from lxml import html
 
@@ -89,7 +90,7 @@ class BestBuyBSRCrawler(BaseCrawler):
                 if is_pagination_visible:
                     break
 
-                scroll_step = random.randint(205, 350)
+                scroll_step = random.randint(250, 350)
                 current_position += scroll_step
                 self.driver.execute_script(f"window.scrollTo(0, {current_position});")
                 time.sleep(random.uniform(0.5, 0.7))
