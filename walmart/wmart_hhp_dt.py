@@ -247,7 +247,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
         # 4. batch_id 설정
         if not self.batch_id:
-            self.batch_id = 'w_20251128_094211'
+            self.batch_id = 'w_20251130_000012'
 
         print(f"[INFO] Initialize completed: batch_id={self.batch_id}")
         return True
@@ -353,9 +353,9 @@ class WalmartDetailCrawler(BaseCrawler):
             no_ratings_elements = tree.xpath(no_ratings_xpath) if no_ratings_xpath else []
             if no_ratings_elements:
                 no_ratings_text = no_ratings_elements[0].text_content().strip()
-                # 괄호 제거 후 비교
-                no_ratings_text_clean = re.sub(r'\(.*?\)', '', no_ratings_text).strip()
-                if no_ratings_text_clean == 'No ratings yet':
+                # 괄호만 제거 (괄호 안 내용은 유지)
+                no_ratings_text_clean = no_ratings_text.replace('(', '').replace(')', '').strip()
+                if 'No ratings yet' in no_ratings_text_clean:
                     no_ratings_yet = True
                     print("[INFO] No ratings yet 감지 - 리뷰 필드 스킵 예정")
 
