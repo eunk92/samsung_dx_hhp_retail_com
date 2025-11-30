@@ -315,8 +315,6 @@ class WalmartDetailCrawler(BaseCrawler):
                 shipping_info_xpath = self.xpaths.get('shipping_info', {}).get('xpath')
                 if shipping_info_xpath:
                     shipping_info_raw = tree.xpath(shipping_info_xpath)
-                    print(f"[DEBUG] shipping_info_xpath: {shipping_info_xpath}")
-                    print(f"[DEBUG] shipping_info_raw: {shipping_info_raw}")
                     if isinstance(shipping_info_raw, list):
                         # 텍스트 조합 후 중복 제거
                         texts = [text.strip() for text in shipping_info_raw if text.strip()]
@@ -331,7 +329,6 @@ class WalmartDetailCrawler(BaseCrawler):
                                 shipping_info = first_half
                     else:
                         shipping_info = shipping_info_raw
-                    print(f"[DEBUG] shipping_info: {shipping_info}")
             except Exception:
                 pass
 
