@@ -1,5 +1,5 @@
 """
-Walmart Main 페이지 크롤러 (Playwright 기반)
+Walmart Main 페이지 크롤러 (undetected-chromedriver 기반)
 
 ================================================================================
 실행 모드
@@ -30,7 +30,10 @@ import re
 import traceback
 from datetime import datetime
 from lxml import html
-from playwright.sync_api import sync_playwright
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # 공통 환경 설정 (작업 디렉토리, 한글 출력, 경로 설정)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,7 +45,7 @@ from common.base_crawler import BaseCrawler
 
 class WalmartMainCrawler(BaseCrawler):
     """
-    Walmart Main 페이지 크롤러 (Playwright 기반)
+    Walmart Main 페이지 크롤러 (undetected-chromedriver 기반)
     """
 
     def __init__(self, test_mode=True, batch_id=None):
@@ -56,11 +59,9 @@ class WalmartMainCrawler(BaseCrawler):
         self.calendar_week = None
         self.url_template = None
 
-        # Playwright 객체
-        self.playwright = None
-        self.browser = None
-        self.context = None
-        self.page = None
+        # undetected-chromedriver 객체
+        self.driver = None
+        self.wait = None
 
         self.test_count = 3  # 테스트 모드
         self.max_products = 300  # 운영 모드
@@ -108,122 +109,66 @@ class WalmartMainCrawler(BaseCrawler):
             print(f"[WARNING] Price formatting failed: {e}")
             return None
 
-    def setup_playwright(self):
-        """Playwright 브라우저 설정"""
+    def setup_driver(self):
+        """undetected-chromedriver 설정"""
         try:
-            # Windows TEMP 폴더 문제 해결
-            temp_dir = 'C:\\Temp'
-            os.makedirs(temp_dir, exist_ok=True)
-            os.environ['TEMP'] = temp_dir
-            os.environ['TMP'] = temp_dir
+            options = uc.ChromeOptions()
 
-            self.playwright = sync_playwright().start()
+            # 페이지 로드 전략
+            options.page_load_strategy = 'none'
 
-            self.browser = self.playwright.chromium.launch(
-                headless=False,
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-dev-shm-usage',
-                    '--no-sandbox',
-                    '--start-maximized',
-                    '--lang=en-US'
-                ]
-            )
+            # 기본 옵션
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--window-size=1920,1080')
+            options.add_argument('--lang=en-US,en;q=0.9')
+            options.add_argument('--start-maximized')
 
-            self.context = self.browser.new_context(
-                viewport=None,
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                locale='en-US'
-            )
+            # 알림 비활성화
+            prefs = {
+                "profile.default_content_setting_values.notifications": 2,
+                "credentials_enable_service": False,
+                "profile.password_manager_enabled": False,
+            }
+            options.add_experimental_option("prefs", prefs)
 
-            self.context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
-                window.chrome = {
-                    runtime: {},
-                    loadTimes: function() {},
-                    csi: function() {},
-                    app: {}
-                };
-            """)
+            # undetected_chromedriver 사용
+            self.driver = uc.Chrome(options=options)
+            self.driver.set_page_load_timeout(120)
+            self.wait = WebDriverWait(self.driver, 20)
 
-            self.page = self.context.new_page()
-            print("[OK] Playwright browser initialized")
+            print("[OK] undetected-chromedriver initialized")
             return True
 
         except Exception as e:
-            print(f"[ERROR] Failed to setup Playwright: {e}")
+            print(f"[ERROR] Failed to setup driver: {e}")
             traceback.print_exc()
             return False
 
     def handle_captcha(self):
-        """CAPTCHA 자동 해결"""
+        """CAPTCHA 감지 및 수동 처리 안내 (실제 Press & Hold 버튼이 있을 때만)"""
         try:
-            time.sleep(random.uniform(1, 5))
+            time.sleep(3)
 
-            captcha_selectors = [
-                'button:has-text("PRESS & HOLD")',
-                'div:has-text("PRESS & HOLD")',
-                'text="PRESS & HOLD"',
-                'text=/PRESS.*HOLD/i',
-                '[class*="captcha"]',
-                '[id*="captcha"]'
-            ]
+            page_content = self.driver.page_source.lower()
 
-            button = None
-            for selector in captcha_selectors:
-                try:
-                    temp_button = self.page.locator(selector).first
-                    if temp_button.is_visible(timeout=5000):
-                        text = temp_button.inner_text(timeout=2000).upper()
-                        if 'PRESS' in text or 'HOLD' in text or 'CAPTCHA' in text:
-                            button = temp_button
-                            print(f"[WARNING] CAPTCHA detected")
-                            break
-                except:
-                    continue
-
-            if not button:
-                page_content = self.page.content().lower()
-                if any(keyword in page_content for keyword in ['press & hold', 'press and hold', 'captcha']):
-                    time.sleep(random.uniform(43, 47))
-                    return True
+            # CAPTCHA 키워드 (실제 Press & Hold 버튼만 감지)
+            captcha_keywords = ['press & hold', 'press and hold']
+            if any(keyword in page_content for keyword in captcha_keywords):
+                print("[WARNING] CAPTCHA 감지! (Press & Hold)")
+                print("[INFO] 브라우저에서 수동으로 해결 후 엔터를 누르세요...")
+                input()
                 return True
 
-            box = button.bounding_box()
-            if box:
-                center_x = box['x'] + box['width'] / 2
-                center_y = box['y'] + box['height'] / 2
-
-                self.page.mouse.move(center_x, center_y)
-                time.sleep(random.uniform(0.3, 0.6))
-
-                self.page.mouse.down()
-                hold_time = random.uniform(7, 9)
-                time.sleep(hold_time)
-                self.page.mouse.up()
-
-                time.sleep(random.uniform(3, 5))
-
-                try:
-                    if not button.is_visible(timeout=3000):
-                        print("[OK] CAPTCHA solved")
-                        return True
-                    else:
-                        time.sleep(random.uniform(58, 62))
-                        return True
-                except:
-                    return True
-
-            return False
+            return True
 
         except Exception as e:
-            print(f"[WARNING] CAPTCHA check failed: {e}")
+            print(f"[WARNING] CAPTCHA handling error: {e}")
             return True
 
     def initialize(self):
-        """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → Playwright 설정 → batch_id 생성 → 로그 정리"""
+        """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → 드라이버 설정 → batch_id 생성 → 로그 정리"""
         # 1. DB 연결
         if not self.connect_db():
             print("[ERROR] Initialize failed: DB connection failed")
@@ -240,9 +185,9 @@ class WalmartMainCrawler(BaseCrawler):
             print(f"[ERROR] Initialize failed: URL template load failed (account={self.account_name}, page_type={self.page_type})")
             return False
 
-        # 4. Playwright 설정
-        if not self.setup_playwright():
-            print("[ERROR] Initialize failed: Playwright setup failed")
+        # 4. undetected-chromedriver 설정
+        if not self.setup_driver():
+            print("[ERROR] Initialize failed: Driver setup failed")
             return False
 
         # 5. batch_id 생성
@@ -264,10 +209,10 @@ class WalmartMainCrawler(BaseCrawler):
             while True:
                 scroll_step = random.randint(250, 350)
                 current_position += scroll_step
-                self.page.evaluate(f"window.scrollTo(0, {current_position});")
+                self.driver.execute_script(f"window.scrollTo(0, {current_position});")
                 time.sleep(random.uniform(0.5, 0.7))
 
-                total_height = self.page.evaluate("document.body.scrollHeight")
+                total_height = self.driver.execute_script("return document.body.scrollHeight")
                 if current_position >= total_height:
                     break
 
@@ -278,7 +223,7 @@ class WalmartMainCrawler(BaseCrawler):
             traceback.print_exc()
 
     def crawl_page(self, page_number):
-        """페이지 크롤링: 페이지 로드 → CAPTCHA 처리 → 스크롤 → HTML 파싱(40개 검증) → 제품 데이터 추출"""
+        """페이지 크롤링: 페이지 로드 → CAPTCHA 처리 → 스크롤 → HTML 파싱(50개 검증) → 제품 데이터 추출"""
         try:
             url = self.url_template.replace('{page}', str(page_number))
 
@@ -287,8 +232,8 @@ class WalmartMainCrawler(BaseCrawler):
                 print("[ERROR] base_container XPath not found")
                 return []
 
-            self.page.goto(url, wait_until="domcontentloaded", timeout=90000)
-            time.sleep(random.uniform(3, 5))
+            self.driver.get(url)
+            time.sleep(random.uniform(5, 8))
 
             if page_number == 1:
                 self.handle_captcha()
@@ -299,7 +244,7 @@ class WalmartMainCrawler(BaseCrawler):
             expected_products = 50
 
             for attempt in range(1, 4):
-                page_html = self.page.content()
+                page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
                 base_containers = tree.xpath(base_container_xpath)
 
@@ -504,14 +449,8 @@ class WalmartMainCrawler(BaseCrawler):
             return False
 
         finally:
-            if self.page:
-                self.page.close()
-            if self.context:
-                self.context.close()
-            if self.browser:
-                self.browser.close()
-            if self.playwright:
-                self.playwright.stop()
+            if self.driver:
+                self.driver.quit()
             if self.db_conn:
                 self.db_conn.close()
             if self.standalone:

@@ -1,11 +1,11 @@
 """
-Walmart XPath 테스터
+Walmart XPath 테스터 (undetected-chromedriver 버전)
 
 ================================================================================
 사용법
 ================================================================================
 1. test_xpaths에 테스트할 XPath 추가
-2. 실행: python wmart_xpath_tester.py
+2. 실행: python wmart_xpath_tester_uc.py
 3. URL 입력 후 결과 확인
 4. 엔터키로 종료
 
@@ -22,17 +22,21 @@ from common.setup import setup_environment
 setup_environment(__file__)
 
 from lxml import html
-from playwright.sync_api import sync_playwright
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
 
 # ============================================================================
 # 설정
 # ============================================================================
 
 # 테스트할 XPath 목록 (필드명: [xpath 후보들])
+# 여러 개인 경우 순서대로 시도 (fallback)
 TEST_XPATHS = {
-     'example_field': [
-        # 테스트할 XPath를 여기에 추가
-        "//div[@class='example']//span/text()",
+    'shipping_info': [
+        "(//label[@data-testid='shipping-tile'])[1]//text()",
     ],
 }
 
@@ -43,59 +47,44 @@ CONTAINER_XPATH = ""
 # 테스터 클래스
 # ============================================================================
 
-class WalmartXPathTester:
+class WalmartXPathTesterUC:
+    """undetected-chromedriver 기반 XPath 테스터"""
+
     def __init__(self):
-        self.playwright = None
-        self.browser = None
-        self.context = None
-        self.page = None
+        self.driver = None
+        self.wait = None
 
-    def setup_playwright(self):
-        """Playwright 브라우저 설정 (메인 크롤러와 동일)"""
-        print("[INFO] Playwright 브라우저 설정 중...")
+    def setup_driver(self):
+        """undetected-chromedriver 설정"""
+        print("[INFO] undetected-chromedriver 설정 중...")
 
-        # Windows TEMP 폴더 문제 해결
-        temp_dir = 'C:\\Temp'
-        os.makedirs(temp_dir, exist_ok=True)
-        os.environ['TEMP'] = temp_dir
-        os.environ['TMP'] = temp_dir
+        options = uc.ChromeOptions()
 
-        self.playwright = sync_playwright().start()
+        # 페이지 로드 전략
+        options.page_load_strategy = 'none'
 
-        # Chromium 브라우저 실행 (메인 크롤러와 동일)
-        self.browser = self.playwright.chromium.launch(
-            headless=False,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--disable-dev-shm-usage',
-                '--no-sandbox',
-                '--start-maximized',
-                '--lang=en-US'
-            ]
-        )
+        # 기본 옵션
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--lang=en-US,en;q=0.9')
+        options.add_argument('--start-maximized')
 
-        # 컨텍스트 생성 (메인 크롤러와 동일)
-        self.context = self.browser.new_context(
-            viewport=None,
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            locale='en-US'
-        )
+        # 알림 비활성화
+        prefs = {
+            "profile.default_content_setting_values.notifications": 2,
+            "credentials_enable_service": False,
+            "profile.password_manager_enabled": False,
+        }
+        options.add_experimental_option("prefs", prefs)
 
-        # 자동화 감지 방지 스크립트 (메인 크롤러와 동일)
-        self.context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            window.chrome = {
-                runtime: {},
-                loadTimes: function() {},
-                csi: function() {},
-                app: {}
-            };
-        """)
+        # undetected_chromedriver 사용
+        self.driver = uc.Chrome(options=options)
+        self.driver.set_page_load_timeout(120)
+        self.wait = WebDriverWait(self.driver, 20)
 
-        self.page = self.context.new_page()
-        print("[INFO] Playwright 브라우저 설정 완료")
+        print("[INFO] undetected-chromedriver 설정 완료")
 
     def scroll_to_bottom(self):
         """스크롤: 300px씩 점진적 스크롤 → 페이지 하단까지 진행"""
@@ -104,124 +93,69 @@ class WalmartXPathTester:
             current_position = 0
             while True:
                 current_position += scroll_step
-                self.page.evaluate(f"window.scrollTo(0, {current_position});")
+                self.driver.execute_script(f"window.scrollTo(0, {current_position});")
                 time.sleep(random.uniform(0.3, 0.7))
-                total_height = self.page.evaluate("document.body.scrollHeight")
+                total_height = self.driver.execute_script("return document.body.scrollHeight")
                 if current_position >= total_height:
                     break
             time.sleep(random.uniform(1, 3))
         except Exception as e:
             print(f"[ERROR] Scroll failed: {e}")
 
-    def handle_captcha(self):
-        """CAPTCHA 감지 및 처리"""
+    def check_and_handle_block(self):
+        """차단/CAPTCHA 감지 및 처리 (실제로 감지된 경우에만 안내)"""
         try:
-            time.sleep(3)
+            page_content = self.driver.page_source.lower()
 
-            captcha_selectors = [
-                'button:has-text("PRESS & HOLD")',
-                'div:has-text("PRESS & HOLD")',
-                'text="PRESS & HOLD"',
-                'text=/PRESS.*HOLD/i',
-                '[class*="captcha"]',
-                '[id*="captcha"]'
-            ]
+            # CAPTCHA 키워드 (press & hold 버튼)
+            captcha_keywords = ['press & hold', 'press and hold']
 
-            button = None
-            for selector in captcha_selectors:
-                try:
-                    temp_button = self.page.locator(selector).first
-                    if temp_button.is_visible(timeout=5000):
-                        text = temp_button.inner_text(timeout=2000).upper()
-                        if 'PRESS' in text or 'HOLD' in text or 'CAPTCHA' in text:
-                            button = temp_button
-                            print(f"[WARNING] CAPTCHA detected")
-                            break
-                except:
-                    continue
+            # 차단 키워드 (별도 처리)
+            block_keywords = ['access denied', 'blocked', 'unusual activity']
 
-            if not button:
-                page_content = self.page.content().lower()
-                if any(keyword in page_content for keyword in ['press & hold', 'press and hold', 'captcha']):
-                    print("[WARNING] CAPTCHA keywords found - waiting for manual input...")
-                    print("[INFO] 브라우저에서 수동으로 해결 후 엔터를 누르세요...")
-                    input()
-                    return True
+            # robot check는 CAPTCHA와 함께 나오는 경우가 많음
+            has_captcha = any(keyword in page_content for keyword in captcha_keywords)
+            has_block = any(keyword in page_content for keyword in block_keywords)
+
+            if has_captcha:
+                print("[WARNING] CAPTCHA 감지! (Press & Hold)")
+                print("[INFO] 브라우저에서 수동으로 해결 후 엔터를 누르세요...")
+                input()
+                time.sleep(2)
+                return True
+            elif has_block:
+                print("[WARNING] 차단/에러 감지!")
+                print("[INFO] 브라우저에서 수동으로 해결 후 엔터를 누르세요...")
+                print("[TIP] 페이지가 정상이면 그냥 엔터를 누르세요.")
+                input()
+                time.sleep(2)
                 return True
 
-            print("[INFO] Attempting to solve CAPTCHA...")
-            box = button.bounding_box()
-            if box:
-                center_x = box['x'] + box['width'] / 2
-                center_y = box['y'] + box['height'] / 2
-
-                self.page.mouse.move(center_x, center_y)
-                time.sleep(random.uniform(0.3, 0.6))
-
-                self.page.mouse.down()
-                hold_time = random.uniform(7, 9)
-                time.sleep(hold_time)
-                self.page.mouse.up()
-
-                time.sleep(random.uniform(3, 5))
-
-                try:
-                    if not button.is_visible(timeout=3000):
-                        print("[OK] CAPTCHA solved")
-                        return True
-                    else:
-                        print("[WARNING] CAPTCHA still visible - waiting for manual input...")
-                        print("[INFO] 브라우저에서 수동으로 해결 후 엔터를 누르세요...")
-                        input()
-                        return True
-                except:
-                    return True
-
-            return True
+            return False  # 차단 없음
 
         except Exception as e:
-            print(f"[WARNING] CAPTCHA handling error: {e}")
-            return True
+            print(f"[WARNING] Block check error: {e}")
+            return False
 
     def load_page(self, url):
         """페이지 로드"""
         print(f"[INFO] 페이지 로딩: {url}")
-        self.page.goto(url, wait_until='domcontentloaded')
+        self.driver.get(url)
 
         # 랜덤 대기 시간
         wait_time = random.uniform(5, 8)
         print(f"[INFO] 대기 중... ({wait_time:.1f}초)")
         time.sleep(wait_time)
 
-        # CAPTCHA 처리
-        self.handle_captcha()
-
-        # 페이지 상태 확인
-        page_html = self.page.content().lower()
-
-        # Walmart 차단/에러 감지
-        block_phrases = [
-            'access denied',
-            'blocked',
-            'robot check',
-            'unusual activity',
-        ]
-
-        is_blocked = any(phrase in page_html for phrase in block_phrases)
-
-        if is_blocked:
-            print("[WARNING] 차단/에러 감지!")
-            print("[INFO] 브라우저에서 수동으로 해결 후 엔터를 누르세요...")
-            print("[TIP] 페이지가 정상이면 그냥 엔터를 누르세요.")
-            input()
-            time.sleep(2)
+        # 차단/CAPTCHA 감지 및 처리 (한 번만 체크)
+        self.check_and_handle_block()
 
         # 페이지 하단까지 스크롤 (요소 로딩을 위해)
         print("[INFO] 하단까지 스크롤 중...")
         self.scroll_to_bottom()
 
         print("[INFO] 페이지 로딩 완료")
-        return html.fromstring(self.page.content())
+        return html.fromstring(self.driver.page_source)
 
     def extract_text(self, element):
         """요소에서 텍스트 추출"""
@@ -292,53 +226,47 @@ class WalmartXPathTester:
 
     def run(self):
         """테스터 실행"""
-        # URL 입력받기
-        url = input("테스트할 URL을 입력하세요: ").strip()
-        if not url:
-            print("URL이 입력되지 않아 프로그램을 종료합니다.")
-            return
-
         # 페이지 타입 선택
         page_type = input("페이지 타입 (1=상세, 2=리스트, 기본값=1): ").strip()
         use_container = page_type == '2'
 
         try:
-            self.setup_playwright()
+            self.setup_driver()
 
-            tree = self.load_page(url)
+            while True:
+                # URL 입력받기
+                url = input("\n테스트할 URL을 입력하세요 (엔터=종료): ").strip()
+                if not url:
+                    print("프로그램을 종료합니다.")
+                    break
 
-            print("\n" + "="*60)
-            print("XPath 테스트 결과")
-            print("="*60)
-            print(f"URL: {url}")
-            print(f"모드: {'컨테이너 기반 (리스트)' if use_container else '상세 페이지'}")
+                tree = self.load_page(url)
 
-            for field_name, xpath_list in TEST_XPATHS.items():
-                if use_container:
-                    self.test_xpaths_with_container(tree, field_name, xpath_list)
-                else:
-                    self.test_xpaths(tree, field_name, xpath_list)
+                print("\n" + "="*60)
+                print("XPath 테스트 결과")
+                print("="*60)
+                print(f"URL: {url}")
+                print(f"모드: {'컨테이너 기반 (리스트)' if use_container else '상세 페이지'}")
 
-            print("\n" + "="*60)
-            print("테스트 완료")
-            print("="*60)
+                for field_name, xpath_list in TEST_XPATHS.items():
+                    if use_container:
+                        self.test_xpaths_with_container(tree, field_name, xpath_list)
+                    else:
+                        self.test_xpaths(tree, field_name, xpath_list)
+
+                print("\n" + "="*60)
+                print("테스트 완료")
+                print("="*60)
 
         except Exception as e:
             print(f"[ERROR] {e}")
             import traceback
             traceback.print_exc()
         finally:
-            input("\n엔터키를 누르면 종료합니다...")
-            if self.page:
-                self.page.close()
-            if self.context:
-                self.context.close()
-            if self.browser:
-                self.browser.close()
-            if self.playwright:
-                self.playwright.stop()
+            if self.driver:
+                self.driver.quit()
 
 
 if __name__ == "__main__":
-    tester = WalmartXPathTester()
+    tester = WalmartXPathTesterUC()
     tester.run()
