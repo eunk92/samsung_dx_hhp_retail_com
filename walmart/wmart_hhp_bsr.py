@@ -239,7 +239,7 @@ class WalmartBSRCrawler(BaseCrawler):
                     time.sleep(random.uniform(2, 3))
 
                     # "phone" 타이핑 (사람처럼 천천히)
-                    for char in "phone":
+                    for char in "cellphone":
                         search_box.send_keys(char)
                         time.sleep(random.uniform(0.1, 0.3))
 
