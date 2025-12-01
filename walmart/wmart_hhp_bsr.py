@@ -266,12 +266,6 @@ class WalmartBSRCrawler(BaseCrawler):
             except Exception as e:
                 print(f"[WARNING] 검색 실패 (계속 진행): {e}")
 
-            # 4단계: 카테고리 페이지 방문 (자연스러운 네비게이션)
-            print("[INFO] Step 4/4: Electronics 카테고리 방문...")
-            self.driver.get('https://www.walmart.com/cp/electronics/3944')
-            time.sleep(random.uniform(4, 6))
-            self.add_random_mouse_movements()
-
             print("[OK] 세션 초기화 완료")
             return True
 
@@ -344,7 +338,11 @@ class WalmartBSRCrawler(BaseCrawler):
     def crawl_page(self, page_number):
         """페이지 크롤링: 페이지 로드 → CAPTCHA 처리 → 스크롤 → HTML 파싱(40개 검증) → 제품 데이터 추출"""
         try:
-            url = self.url_template.replace('{page}', str(page_number))
+            # 첫 페이지는 &page= 파라미터 없이 URL 생성
+            if page_number == 1:
+                url = self.url_template.replace('&page={page}', '')
+            else:
+                url = self.url_template.replace('{page}', str(page_number))
 
             base_container_xpath = self.xpaths.get('base_container', {}).get('xpath')
             if not base_container_xpath:
