@@ -29,18 +29,20 @@ import re
 import traceback
 from datetime import datetime
 from lxml import html
-from playwright.sync_api import sync_playwright
 
 # 공통 환경 설정 (작업 디렉토리, 한글 출력, 경로 설정)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.setup import setup_environment
 setup_environment(__file__)
 
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
+
 from common.base_crawler import BaseCrawler
 from common import data_extractor
-
-# 쿠키/세션 저장 파일 (walmart 폴더 내, Main과 공유)
-STORAGE_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "walmart_hhp_storage_state.json")
 
 
 class WalmartDetailCrawler(BaseCrawler):
@@ -57,195 +59,51 @@ class WalmartDetailCrawler(BaseCrawler):
         self.test_mode = test_mode
         self.standalone = batch_id is None
 
-        # Playwright 객체
-        self.playwright = None
-        self.browser = None
-        self.context = None
-        self.page = None
+        # Selenium/undetected-chromedriver 객체
+        self.driver = None
+        self.wait = None
 
-    def setup_playwright(self):
-        """Playwright 브라우저 설정 (쿠키 저장/로드 지원)"""
+    def setup_browser(self):
+        """undetected-chromedriver 브라우저 설정 (TV 크롤러와 동일)"""
         try:
-            self.playwright = sync_playwright().start()
+            print("[INFO] undetected-chromedriver 설정 중 (TV 크롤러와 동일한 방식)...")
 
-            # 설치된 Chrome 사용
-            self.browser = self.playwright.chromium.launch(
-                headless=False,
-                channel="chrome",
-                args=[
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-dev-shm-usage',
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-infobars',
-                    '--window-size=1920,1080',
-                    '--start-maximized',
-                    '--lang=en-US,en;q=0.9'
-                ]
-            )
+            options = uc.ChromeOptions()
+            options.add_argument('--disable-blink-features=AutomationControlled')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-setuid-sandbox')
+            options.add_argument('--start-maximized')
+            options.add_argument('--disable-infobars')
+            options.add_argument('--window-size=1920,1080')
 
-            # 저장된 쿠키/세션 확인
-            storage_state = None
-            if os.path.exists(STORAGE_STATE_FILE):
-                print(f"[INFO] 저장된 세션 발견: {STORAGE_STATE_FILE}")
-                print("[INFO] 이전 세션의 쿠키를 로드합니다...")
-                storage_state = STORAGE_STATE_FILE
-            else:
-                print("[INFO] 저장된 세션 없음, 새 세션 시작")
+            self.driver = uc.Chrome(options=options, use_subprocess=True)
+            self.wait = WebDriverWait(self.driver, 20)
 
-            # 컨텍스트 옵션
-            context_options = {
-                'viewport': {'width': 1920, 'height': 1080},
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'locale': 'en-US',
-                'timezone_id': 'America/New_York',
-                'permissions': ['geolocation', 'notifications'],
-                'geolocation': {'longitude': -74.006, 'latitude': 40.7128},
-                'color_scheme': 'light',
-                'extra_http_headers': {
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'DNT': '1',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1',
-                    'Sec-Fetch-Dest': 'document',
-                    'Sec-Fetch-Mode': 'navigate',
-                    'Sec-Fetch-Site': 'none',
-                    'Sec-Fetch-User': '?1',
-                    'Cache-Control': 'max-age=0'
-                }
-            }
-
-            # 저장된 세션이 있으면 로드
-            if storage_state:
-                context_options['storage_state'] = storage_state
-
-            # 컨텍스트 생성
-            self.context = self.browser.new_context(**context_options)
-
-            # 스텔스 스크립트 주입
-            self.context.add_init_script(self.get_stealth_script())
-
-            self.page = self.context.new_page()
-            self.page.set_default_timeout(60000)
-
-            print("[OK] Playwright initialized (with stealth)")
+            print("[OK] undetected-chromedriver 설정 완료")
             return True
 
         except Exception as e:
-            print(f"[ERROR] Failed to setup Playwright: {e}")
+            print(f"[ERROR] Failed to setup browser: {e}")
             traceback.print_exc()
             return False
-
-    def save_storage_state(self):
-        """현재 세션 상태(쿠키 + localStorage) 저장"""
-        try:
-            if self.context:
-                self.context.storage_state(path=STORAGE_STATE_FILE)
-                print(f"[OK] 세션 저장됨: {STORAGE_STATE_FILE}")
-                return True
-        except Exception as e:
-            print(f"[WARNING] 세션 저장 실패: {e}")
-            return False
-
-    def get_stealth_script(self):
-        """봇 탐지 우회를 위한 스텔스 스크립트"""
-        return """
-            // navigator.webdriver 숨기기
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            delete navigator.__proto__.webdriver;
-
-            // plugins 오버라이드
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [
-                    {
-                        0: {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format"},
-                        description: "Portable Document Format",
-                        filename: "internal-pdf-viewer",
-                        length: 1,
-                        name: "Chrome PDF Plugin"
-                    },
-                    {
-                        0: {type: "application/pdf", suffixes: "pdf", description: ""},
-                        description: "",
-                        filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai",
-                        length: 1,
-                        name: "Chrome PDF Viewer"
-                    }
-                ]
-            });
-
-            // languages 오버라이드
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en']
-            });
-
-            // chrome 객체 추가
-            window.chrome = {
-                runtime: {},
-                loadTimes: function() {},
-                csi: function() {},
-                app: {}
-            };
-
-            // permissions 오버라이드
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
-
-            // WebGL vendor 오버라이드
-            const getParameter = WebGLRenderingContext.prototype.getParameter;
-            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                if (parameter === 37445) return 'Intel Inc.';
-                if (parameter === 37446) return 'Intel Iris OpenGL Engine';
-                return getParameter.apply(this, arguments);
-            };
-
-            // 화면 해상도 일관성
-            Object.defineProperty(screen, 'width', { get: () => 1920 });
-            Object.defineProperty(screen, 'height', { get: () => 1080 });
-            Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
-            Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
-
-            // 하드웨어 정보
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-
-            // 연결 정보
-            Object.defineProperty(navigator, 'connection', {
-                get: () => ({
-                    effectiveType: '4g',
-                    rtt: 50,
-                    downlink: 10,
-                    saveData: false
-                })
-            });
-
-            // Notification permission
-            Object.defineProperty(Notification, 'permission', {
-                get: () => 'default'
-            });
-        """
 
     def add_random_mouse_movements(self):
         """인간처럼 보이기 위한 랜덤 마우스 움직임"""
         try:
+            actions = ActionChains(self.driver)
             for _ in range(random.randint(2, 4)):
-                x = random.randint(100, 1800)
-                y = random.randint(100, 900)
-                self.page.mouse.move(x, y)
+                x_offset = random.randint(-100, 100)
+                y_offset = random.randint(-100, 100)
+                actions.move_by_offset(x_offset, y_offset)
+                actions.perform()
+                actions.reset_actions()
                 time.sleep(random.uniform(0.1, 0.3))
         except Exception:
             pass  # 마우스 움직임 실패 시 무시
 
     def handle_captcha(self, max_attempts=3):
-        """CAPTCHA 감지 및 자동/수동 처리 (iframe 지원)"""
+        """CAPTCHA 감지 및 수동 처리"""
         try:
             time.sleep(2)
 
@@ -253,7 +111,7 @@ class WalmartDetailCrawler(BaseCrawler):
             captcha_keywords = ['press & hold', 'press and hold', 'human verification', 'robot or human', 'verify you are human']
 
             for attempt in range(max_attempts):
-                page_content = self.page.content().lower()
+                page_content = self.driver.page_source.lower()
 
                 if not any(keyword in page_content for keyword in captcha_keywords):
                     if attempt > 0:
@@ -261,138 +119,9 @@ class WalmartDetailCrawler(BaseCrawler):
                     return True
 
                 print(f"[WARNING] CAPTCHA 감지! (시도 {attempt + 1}/{max_attempts})")
+                print("[INFO] 브라우저에서 CAPTCHA를 수동으로 해결한 후 엔터를 누르세요...")
+                input()
 
-                # Press & Hold 버튼 자동 시도
-                try:
-                    button = None
-                    target_frame = self.page
-
-                    # 1. 먼저 iframe 안에서 버튼 찾기 (Walmart CAPTCHA는 보통 iframe 내부)
-                    frames = self.page.frames
-                    for frame in frames:
-                        if frame == self.page.main_frame:
-                            continue
-                        try:
-                            frame_content = frame.content().lower()
-                            if any(keyword in frame_content for keyword in captcha_keywords):
-                                print(f"[INFO] CAPTCHA iframe 발견")
-                                target_frame = frame
-                                break
-                        except:
-                            continue
-
-                    # 2. 텍스트 기반으로 Press & Hold 버튼 찾기 (가장 우선)
-                    print("[INFO] Press & Hold 버튼 검색 중...")
-
-                    # 방법 1: get_by_text로 텍스트 직접 검색
-                    text_patterns = [
-                        "Press & Hold",
-                        "PRESS & HOLD",
-                        "press & hold",
-                        "Press and Hold",
-                        "PRESS AND HOLD",
-                    ]
-
-                    for text_pattern in text_patterns:
-                        try:
-                            temp_button = target_frame.get_by_text(text_pattern, exact=False).first
-                            if temp_button.is_visible(timeout=1000):
-                                button = temp_button
-                                print(f"[OK] CAPTCHA 버튼 발견 (텍스트): '{text_pattern}'")
-                                break
-                        except:
-                            continue
-
-                    # 방법 2: role="button" 요소 중 텍스트 포함된 것 찾기
-                    if not button:
-                        try:
-                            role_buttons = target_frame.locator('div[role="button"]')
-                            count = role_buttons.count()
-                            print(f"[DEBUG] role=button 요소 {count}개 발견")
-                            for i in range(count):
-                                try:
-                                    btn = role_buttons.nth(i)
-                                    if btn.is_visible(timeout=500):
-                                        btn_text = btn.text_content() or ""
-                                        print(f"[DEBUG] 버튼 {i}: '{btn_text[:50]}'")
-                                        if "hold" in btn_text.lower() or "press" in btn_text.lower():
-                                            button = btn
-                                            print(f"[OK] CAPTCHA 버튼 발견 (role=button): '{btn_text[:30]}'")
-                                            break
-                                except:
-                                    continue
-                        except Exception as e:
-                            print(f"[DEBUG] role=button 검색 실패: {e}")
-
-                    # 방법 3: 기존 셀렉터들
-                    if not button:
-                        button_selectors = [
-                            '[aria-label*="Press & Hold"]',
-                            '[aria-label*="Human Challenge"]',
-                            '#px-captcha',
-                            '[id*="captcha"]',
-                            '[class*="captcha"]',
-                        ]
-
-                        for selector in button_selectors:
-                            try:
-                                temp_button = target_frame.locator(selector).first
-                                if temp_button.is_visible(timeout=1000):
-                                    button = temp_button
-                                    print(f"[OK] CAPTCHA 버튼 발견 (셀렉터): {selector}")
-                                    break
-                            except:
-                                continue
-
-                    if button:
-                        print("[INFO] Press & Hold 버튼 자동 시도 중...")
-
-                        # 버튼 위치로 천천히 이동
-                        box = button.bounding_box()
-                        if box:
-                            center_x = box['x'] + box['width'] / 2
-                            center_y = box['y'] + box['height'] / 2
-
-                            # 인간처럼 커서를 천천히 이동
-                            current_x, current_y = random.randint(100, 300), random.randint(100, 300)
-                            steps = random.randint(5, 10)
-                            for i in range(steps):
-                                progress = (i + 1) / steps
-                                new_x = current_x + (center_x - current_x) * progress
-                                new_y = current_y + (center_y - current_y) * progress
-                                self.page.mouse.move(new_x, new_y)
-                                time.sleep(random.uniform(0.02, 0.05))
-
-                            time.sleep(random.uniform(0.3, 0.7))
-
-                            # 버튼 누르고 10~13초 유지 (더 길게)
-                            self.page.mouse.down()
-                            hold_time = random.uniform(10, 13)
-                            print(f"[INFO] {hold_time:.1f}초 동안 유지 중...")
-                            time.sleep(hold_time)
-                            self.page.mouse.up()
-
-                            print("[INFO] CAPTCHA 자동 시도 완료, 결과 확인 중...")
-                            time.sleep(random.uniform(3, 5))
-                            continue  # 다음 attempt에서 확인
-
-                    else:
-                        print("[WARNING] CAPTCHA 버튼을 찾을 수 없음")
-
-                        # 스크린샷 저장 (디버깅용)
-                        try:
-                            screenshot_path = f"captcha_debug_{attempt}.png"
-                            self.page.screenshot(path=screenshot_path)
-                            print(f"[DEBUG] 스크린샷 저장: {screenshot_path}")
-                        except:
-                            pass
-
-                except Exception as e:
-                    print(f"[WARNING] 자동 CAPTCHA 시도 실패: {e}")
-
-            # 모든 자동 시도 실패 시 수동 처리
-            print("[INFO] 자동 해결 실패. 브라우저에서 수동으로 해결 후 엔터를 누르세요...")
-            input()
             return True
 
         except Exception as e:
@@ -400,36 +129,92 @@ class WalmartDetailCrawler(BaseCrawler):
             return True
 
     def initialize_session(self):
-        """세션 초기화: example.com → walmart.com → 검색 페이지 순차 접근"""
+        """세션 초기화: example.com → walmart.com → 검색 → 카테고리 순차 접근 (TV 크롤러와 동일)"""
         try:
             print("[INFO] 세션 초기화 중...")
 
             # 1단계: 중립 사이트 방문 (브라우저 fingerprint 생성)
-            print("[INFO] Step 1/3: 중립 사이트 방문...")
-            self.page.goto('https://www.example.com', wait_until='domcontentloaded')
+            print("[INFO] Step 1/4: 중립 사이트 방문...")
+            self.driver.get('https://www.example.com')
             time.sleep(random.uniform(2, 4))
             self.add_random_mouse_movements()
 
             # 2단계: Walmart 메인 페이지 방문 (쿠키/세션 생성)
-            print("[INFO] Step 2/3: Walmart 메인 페이지 방문...")
-            self.page.goto('https://www.walmart.com', wait_until='domcontentloaded')
-            time.sleep(random.uniform(5, 8))
+            print("[INFO] Step 2/4: Walmart 메인 페이지 방문...")
+            self.driver.get('https://www.walmart.com')
+            time.sleep(random.uniform(8, 12))
 
             # CAPTCHA 체크
             self.handle_captcha()
 
             # 마우스 움직임 및 스크롤
             self.add_random_mouse_movements()
-            for _ in range(3):
+            for _ in range(random.randint(2, 4)):
                 scroll_y = random.randint(200, 500)
-                self.page.evaluate(f"window.scrollBy(0, {scroll_y})")
+                self.driver.execute_script(f"window.scrollBy(0, {scroll_y})")
                 time.sleep(random.uniform(1, 2))
+                self.add_random_mouse_movements()
 
-            # 3단계: 카테고리 페이지 방문 (자연스러운 네비게이션)
-            print("[INFO] Step 3/3: Electronics 카테고리 방문...")
-            self.page.goto('https://www.walmart.com/cp/electronics/3944', wait_until='domcontentloaded')
-            time.sleep(random.uniform(4, 6))
-            self.add_random_mouse_movements()
+            # 위로 스크롤
+            self.driver.execute_script("window.scrollTo(0, 0)")
+            time.sleep(random.uniform(2, 3))
+
+            # 3단계: 검색창에서 검색 시도 (TV 크롤러와 동일)
+            print("[INFO] Step 3/4: 검색창에서 'phone' 검색 시도...")
+            try:
+                from selenium.webdriver.common.keys import Keys
+
+                search_selectors = [
+                    "input[type='search']",
+                    "input[aria-label*='Search']",
+                    "input[placeholder*='Search']",
+                    "input[name='q']"
+                ]
+
+                search_box = None
+                for selector in search_selectors:
+                    try:
+                        search_box = self.wait.until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        )
+                        if search_box:
+                            print(f"[OK] 검색창 발견: {selector}")
+                            break
+                    except:
+                        continue
+
+                if search_box:
+                    # 검색창 클릭
+                    search_box.click()
+                    time.sleep(random.uniform(2, 3))
+
+                    # "phone" 타이핑 (사람처럼 천천히)
+                    for char in "cellphone":
+                        search_box.send_keys(char)
+                        time.sleep(random.uniform(0.1, 0.3))
+
+                    time.sleep(random.uniform(3, 5))
+
+                    # 검색 실행 (엔터)
+                    search_box.send_keys(Keys.ENTER)
+
+                    # 검색 결과 대기
+                    time.sleep(random.uniform(8, 12))
+
+                    # CAPTCHA 체크
+                    self.handle_captcha()
+
+                    # 자연스러운 스크롤
+                    for _ in range(2):
+                        self.driver.execute_script(f"window.scrollBy(0, {random.randint(200, 400)})")
+                        time.sleep(random.uniform(1, 2))
+
+                    print("[OK] 검색 완료")
+                else:
+                    print("[WARNING] 검색창을 찾지 못함, 검색 단계 건너뜀")
+
+            except Exception as e:
+                print(f"[WARNING] 검색 실패 (계속 진행): {e}")
 
             print("[OK] 세션 초기화 완료")
             return True
@@ -445,14 +230,15 @@ class WalmartDetailCrawler(BaseCrawler):
             if not banner_xpath:
                 return
             try:
-                banner = self.page.locator(f'xpath={banner_xpath}').first
-                if banner.is_visible(timeout=2000):
+                banner = self.driver.find_element(By.XPATH, banner_xpath)
+                if banner.is_displayed():
                     print("[INFO] 배너 감지됨, 닫기 시도...")
                     # 화면 우측 절반의 중앙 클릭
-                    viewport = self.page.viewport_size
-                    click_x = int(viewport['width'] * 0.75)
-                    click_y = int(viewport['height'] * 0.5)
-                    self.page.mouse.click(click_x, click_y)
+                    window_size = self.driver.get_window_size()
+                    click_x = int(window_size['width'] * 0.75)
+                    click_y = int(window_size['height'] * 0.5)
+                    actions = ActionChains(self.driver)
+                    actions.move_by_offset(click_x, click_y).click().perform()
                     time.sleep(random.uniform(0.5, 1))
                     print("[OK] 배너 닫기 완료")
             except:
@@ -485,28 +271,29 @@ class WalmartDetailCrawler(BaseCrawler):
         return None
 
     def scroll_to_bottom(self):
-        """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
+        """페이지 80% 하단까지 빠른 스크롤 (콘텐츠 로드용)"""
         try:
+            total_height = self.driver.execute_script("return document.body.scrollHeight")
+            target_position = int(total_height * 0.8)  # 80%까지만
             current_position = 0
-            while True:
-                scroll_step = random.randint(150, 300)
-                current_position += scroll_step
-                self.page.evaluate(f"window.scrollTo(0, {current_position})")
-                time.sleep(random.uniform(1.0, 1.5))
 
-                # 가끔 마우스 움직임 추가
-                if random.random() < 0.3:
+            while current_position < target_position:
+                # 빠르지만 자연스러운 스크롤 (300~500px)
+                scroll_step = random.randint(300, 500)
+                current_position = min(current_position + scroll_step, target_position)
+                self.driver.execute_script(f"window.scrollTo(0, {current_position})")
+                time.sleep(random.uniform(0.3, 0.6))
+
+                # 10% 확률로 마우스 움직임
+                if random.random() < 0.1:
                     self.add_random_mouse_movements()
 
-                total_height = self.page.evaluate("document.body.scrollHeight")
-                if current_position >= total_height:
-                    break
-            time.sleep(random.uniform(1, 2))
+            time.sleep(random.uniform(0.5, 1))
         except Exception as e:
             print(f"[WARNING] Scroll failed: {e}")
 
     def initialize(self):
-        """초기화: DB 연결 → XPath 로드 → Playwright 설정 → batch_id 설정"""
+        """초기화: DB 연결 → XPath 로드 → 브라우저 설정 → batch_id 설정"""
         # 1. DB 연결
         if not self.connect_db():
             print("[ERROR] Initialize failed: DB connection failed")
@@ -517,9 +304,9 @@ class WalmartDetailCrawler(BaseCrawler):
             print(f"[ERROR] Initialize failed: XPath load failed (account={self.account_name}, page_type={self.page_type})")
             return False
 
-        # 3. Playwright 설정
-        if not self.setup_playwright():
-            print("[ERROR] Initialize failed: Playwright setup failed")
+        # 3. 브라우저 설정 (undetected-chromedriver)
+        if not self.setup_browser():
+            print("[ERROR] Initialize failed: Browser setup failed")
             return False
 
         # 4. 세션 초기화 (example.com → walmart.com → 카테고리)
@@ -527,7 +314,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
         # 5. batch_id 설정
         if not self.batch_id:
-            self.batch_id = 'w_20251130_000012'
+            self.batch_id = 'w_20251201_101640'
 
         print(f"[INFO] Initialize completed: batch_id={self.batch_id}")
         return True
@@ -538,7 +325,7 @@ class WalmartDetailCrawler(BaseCrawler):
             cursor = self.db_conn.cursor()
 
             query = """
-                SELECT DISTINCT ON (product_url)
+                SELECT 
                     retailer_sku_name, final_sku_price, original_sku_price,
                     offer, pick_up_availability, shipping_availability,
                     delivery_availability, sku_status, retailer_membership_discounts,
@@ -594,8 +381,9 @@ class WalmartDetailCrawler(BaseCrawler):
                 print("[WARNING] Product URL is missing")
                 return product
 
-            self.page.goto(product_url, wait_until='domcontentloaded')
-            time.sleep(random.uniform(8, 12))
+            print(f"[DEBUG] 1/10 페이지 로드 시작...")
+            self.driver.get(product_url)
+            time.sleep(random.uniform(3, 5))
 
             # 마우스 움직임 추가
             self.add_random_mouse_movements()
@@ -603,26 +391,32 @@ class WalmartDetailCrawler(BaseCrawler):
             if first_product:
                 if not self.handle_captcha():
                     print("[WARNING] CAPTCHA handling failed")
-                time.sleep(random.uniform(3, 5))
+                time.sleep(random.uniform(1, 2))
 
             # 전체 콘텐츠 로드: 하단까지 스크롤 → 배너 닫기 → 맨 위로 복귀
+            print(f"[DEBUG] 2/10 scroll_to_bottom 시작...")
             self.scroll_to_bottom()
+            print(f"[DEBUG] 2/10 scroll_to_bottom 완료")
             self.close_banner()
-            self.page.evaluate("window.scrollTo(0, 0)")
+            self.driver.execute_script("window.scrollTo(0, 0)")
             time.sleep(random.uniform(0.5, 1))
 
-            page_html = self.page.content()
+            page_html = self.driver.page_source
             tree = html.fromstring(page_html)
 
-            # item ID 추출
-            item = self.extract_item(product_url)
+            # item ID 추출 (리다이렉트된 실제 URL에서)
+            print(f"[DEBUG] 3/10 item 추출...")
+            actual_url = self.driver.current_url
+            item = self.extract_item(actual_url)
 
             # 추가 필드 추출
+            print(f"[DEBUG] 4/10 기본 필드 추출...")
             number_of_ppl_purchased_yesterday = self.safe_extract(tree, 'number_of_ppl_purchased_yesterday')
             number_of_ppl_added_to_carts = self.safe_extract(tree, 'number_of_ppl_added_to_carts')
             sku_popularity = self.safe_extract_join(tree, 'sku_popularity', separator=", ")
             savings = self.safe_extract(tree, 'savings')
             discount_type = self.safe_extract(tree, 'discount_type')
+            print(f"[DEBUG] 4/10 기본 필드 완료")
 
              # "No ratings yet" 체크 (리뷰 없는 상품)
             no_ratings_yet = False
@@ -660,6 +454,7 @@ class WalmartDetailCrawler(BaseCrawler):
                 pass
 
             # 스펙 정보 추출
+            print(f"[DEBUG] 5/10 spec_button 처리 시작...")
             hhp_carrier = None
             hhp_storage = None
             hhp_color = None
@@ -675,13 +470,13 @@ class WalmartDetailCrawler(BaseCrawler):
                         # 100px씩 스크롤하며 spec_button 찾기
                         for _ in range(3):
                             try:
-                                spec_button = self.page.locator(f'xpath={spec_button_xpath}').first
-                                if spec_button.is_visible(timeout=2000):
+                                spec_button = self.driver.find_element(By.XPATH, spec_button_xpath)
+                                if spec_button.is_displayed():
                                     spec_button_found = True
                                     break
                             except:
                                 pass
-                            self.page.evaluate("window.scrollBy(0, 100)")
+                            self.driver.execute_script("window.scrollBy(0, 100)")
                             time.sleep(random.uniform(0.3, 0.5))
 
                         if spec_button_found:
@@ -690,22 +485,29 @@ class WalmartDetailCrawler(BaseCrawler):
                             print(f"[WARNING] spec_button 찾기 실패 (시도 {retry + 1}/3)")
                             time.sleep(random.uniform(1, 2))
                             # HTML 다시 파싱
-                            page_html = self.page.content()
+                            page_html = self.driver.page_source
                             tree = html.fromstring(page_html)
 
                     if spec_button_found:
-                        spec_button.scroll_into_view_if_needed()
+                        # 요소를 화면 중앙에 위치시킴 (상단 헤더에 가려지지 않도록)
+                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", spec_button)
                         time.sleep(random.uniform(1, 2))
-                        spec_button.click()
+
+                        # 클릭 시도 (일반 클릭 실패 시 JavaScript로 강제 클릭)
+                        try:
+                            spec_button.click()
+                        except Exception:
+                            # ElementClickInterceptedException 발생 시 JS로 클릭
+                            self.driver.execute_script("arguments[0].click();", spec_button)
 
                         try:
                             if spec_close_button_xpath:
-                                self.page.wait_for_selector(f'xpath={spec_close_button_xpath}', state='visible', timeout=10000)
+                                self.wait.until(EC.visibility_of_element_located((By.XPATH, spec_close_button_xpath)))
                             time.sleep(random.uniform(0.5, 1.5))
                         except Exception:
                             time.sleep(random.uniform(1, 3))
 
-                        modal_html = self.page.content()
+                        modal_html = self.driver.page_source
                         modal_tree = html.fromstring(modal_html)
 
                         hhp_carrier = self.safe_extract(modal_tree, 'hhp_carrier')
@@ -714,8 +516,8 @@ class WalmartDetailCrawler(BaseCrawler):
 
                         if spec_close_button_xpath:
                             try:
-                                close_button = self.page.locator(f'xpath={spec_close_button_xpath}').first
-                                if close_button.is_visible(timeout=2000):
+                                close_button = self.driver.find_element(By.XPATH, spec_close_button_xpath)
+                                if close_button.is_displayed():
                                     close_button.click()
                                     time.sleep(random.uniform(1, 2))
                             except:
@@ -723,33 +525,34 @@ class WalmartDetailCrawler(BaseCrawler):
             except Exception as e:
                 print(f"[ERROR] spec_button 처리 실패: {e}")
                 traceback.print_exc()
+            print(f"[DEBUG] 5/10 spec_button 완료")
 
-            # 유사 제품 추출
+            # 유사 제품 추출 (빠른 스크롤로 최적화)
+            print(f"[DEBUG] 6/10 similar_products 시작...")
             retailer_sku_name_similar = None
             similar_products_container_xpath = self.xpaths.get('similar_products_container', {}).get('xpath')
 
             if similar_products_container_xpath:
                 try:
-                    scroll_height = self.page.evaluate("document.body.scrollHeight")
-                    current_position = 0
+                    # 페이지 60% 위치로 빠르게 이동 (similar products는 보통 중간~하단에 위치)
+                    scroll_height = self.driver.execute_script("return document.body.scrollHeight")
+                    self.driver.execute_script(f"window.scrollTo(0, {int(scroll_height * 0.6)})")
+                    time.sleep(random.uniform(0.3, 0.5))
 
-                    while current_position < scroll_height:
-                        self.page.evaluate(f"window.scrollTo(0, {current_position})")
-                        time.sleep(random.uniform(0.5, 0.7))
-
+                    # similar section 찾기 시도 (최대 3회 스크롤)
+                    for _ in range(3):
                         try:
-                            similar_section = self.page.locator(f'xpath={similar_products_container_xpath}').first
-                            if similar_section.is_visible(timeout=1000):
-                                similar_section.scroll_into_view_if_needed()
-                                time.sleep(random.uniform(0.5, 1.5))
+                            similar_section = self.driver.find_element(By.XPATH, similar_products_container_xpath)
+                            if similar_section.is_displayed():
+                                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", similar_section)
+                                time.sleep(random.uniform(0.3, 0.5))
                                 break
                         except:
                             pass
+                        self.driver.execute_script("window.scrollBy(0, 400)")
+                        time.sleep(random.uniform(0.2, 0.4))
 
-                        scroll_step = random.randint(205, 350)
-                        current_position += scroll_step
-
-                    page_html = self.page.content()
+                    page_html = self.driver.page_source
                     tree = html.fromstring(page_html)
 
                     product_cards = tree.xpath(similar_products_container_xpath)
@@ -769,8 +572,10 @@ class WalmartDetailCrawler(BaseCrawler):
                         retailer_sku_name_similar = ' ||| '.join(similar_product_names) if similar_product_names else None
                 except Exception:
                     pass
+            print(f"[DEBUG] 6/10 similar_products 완료")
 
             # 리뷰 관련 필드
+            print(f"[DEBUG] 7/10 리뷰 필드 추출 시작...")
             count_of_reviews = None
             star_rating = None
             count_of_star_ratings = None
@@ -782,7 +587,7 @@ class WalmartDetailCrawler(BaseCrawler):
                 count_of_star_ratings = 'No ratings yet'
             else:
                 for retry in range(3):
-                    page_html = self.page.content()
+                    page_html = self.driver.page_source
                     tree = html.fromstring(page_html)
 
                     count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
@@ -805,18 +610,20 @@ class WalmartDetailCrawler(BaseCrawler):
                     if retry < 2:
                         print(f"[WARNING] 리뷰 필드 추출 실패 (시도 {retry + 1}/3) - 재시도 중...")
                         time.sleep(random.uniform(1, 2))
+            print(f"[DEBUG] 7/10 리뷰 필드 완료")
 
             # 리뷰 상세 추출
+            print(f"[DEBUG] 8/10 리뷰 상세 추출 시작...")
             detailed_review_content = None
             reviews_button_xpath = self.xpaths.get('reviews_button', {}).get('xpath')
 
             if reviews_button_xpath:
                 review_button_found = False
 
-                self.page.evaluate("window.scrollTo(0, 0)")
+                self.driver.execute_script("window.scrollTo(0, 0)")
                 time.sleep(random.uniform(0.5, 1.5))
 
-                scroll_height = self.page.evaluate("document.body.scrollHeight")
+                scroll_height = self.driver.execute_script("return document.body.scrollHeight")
                 current_position = 0
 
                 # fallback XPath 로드 (|로 구분된 문자열)
@@ -825,38 +632,66 @@ class WalmartDetailCrawler(BaseCrawler):
 
                 reviews_button_xpaths = [reviews_button_xpath] + fallback_xpaths
 
-                while current_position < scroll_height:
+                scroll_count = 0
+                max_scroll_attempts = 20  # 무한 스크롤 방지
+                while current_position < scroll_height and scroll_count < max_scroll_attempts:
+                    scroll_count += 1
+                    print(f"[DEBUG] 8/10 리뷰버튼 스크롤 {scroll_count}/{max_scroll_attempts} (pos={current_position}/{scroll_height})")
+
+                    # 현재 위치에서 버튼 찾기 시도 (scrollIntoView 없이)
                     for xpath in reviews_button_xpaths:
                         try:
-                            review_button = self.page.locator(f'xpath={xpath}').first
-                            if review_button.is_visible(timeout=1000):
-                                review_button.scroll_into_view_if_needed()
-                                time.sleep(random.uniform(1, 3))
-
+                            review_button = self.driver.find_element(By.XPATH, xpath)
+                            if review_button.is_displayed():
+                                # 버튼이 보이면 클릭 시도 (현재 위치에서)
                                 try:
+                                    # 먼저 일반 클릭 시도
                                     review_button.click()
                                     review_button_found = True
+                                    print(f"[DEBUG] 8/10 리뷰버튼 클릭 성공")
                                     time.sleep(random.uniform(3, 7))
                                     break
                                 except Exception:
-                                    continue
+                                    # 클릭 실패 시 scrollIntoView 후 재시도
+                                    try:
+                                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", review_button)
+                                        time.sleep(random.uniform(0.5, 1))
+                                        review_button.click()
+                                        review_button_found = True
+                                        print(f"[DEBUG] 8/10 리뷰버튼 클릭 성공 (scrollIntoView 후)")
+                                        time.sleep(random.uniform(3, 7))
+                                        break
+                                    except Exception:
+                                        # JS 클릭 시도
+                                        try:
+                                            self.driver.execute_script("arguments[0].click();", review_button)
+                                            review_button_found = True
+                                            print(f"[DEBUG] 8/10 리뷰버튼 클릭 성공 (JS)")
+                                            time.sleep(random.uniform(3, 7))
+                                            break
+                                        except Exception:
+                                            continue
                         except Exception:
                             continue
 
                     if review_button_found:
                         break
 
-                    scroll_step = random.randint(250, 350)
+                    # 버튼을 못 찾았으면 스크롤
+                    scroll_step = random.randint(300, 400)
                     current_position += scroll_step
-                    self.page.evaluate(f"window.scrollTo(0, {current_position})")
-                    time.sleep(random.uniform(0.5, 0.7))
+                    self.driver.execute_script(f"window.scrollTo(0, {current_position})")
+                    time.sleep(random.uniform(0.3, 0.5))
+
+                if scroll_count >= max_scroll_attempts:
+                    print(f"[DEBUG] 8/10 리뷰버튼 스크롤 최대 횟수 도달, 스킵")
 
                 if review_button_found:
                     try:
                         detailed_review_xpath = self.xpaths.get('detailed_review_content', {}).get('xpath')
                         if detailed_review_xpath:
                             try:
-                                self.page.wait_for_selector(f'xpath={detailed_review_xpath}', state='visible', timeout=10000)
+                                self.wait.until(EC.visibility_of_element_located((By.XPATH, detailed_review_xpath)))
                                 time.sleep(random.uniform(1, 3))
                             except Exception:
                                 time.sleep(random.uniform(3, 7))
@@ -869,7 +704,7 @@ class WalmartDetailCrawler(BaseCrawler):
                                 if current_page > 1:
                                     time.sleep(random.uniform(1, 3))
 
-                                page_html = self.page.content()
+                                page_html = self.driver.page_source
                                 tree = html.fromstring(page_html)
 
                                 reviews_list = tree.xpath(detailed_review_xpath)
@@ -896,10 +731,10 @@ class WalmartDetailCrawler(BaseCrawler):
                                     if not review_pagination_template:
                                         break
                                     next_page_xpath = review_pagination_template.replace('{page_num}', str(next_page_num))
-                                    next_page_button = self.page.locator(f'xpath={next_page_xpath}').first
+                                    next_page_button = self.driver.find_element(By.XPATH, next_page_xpath)
 
-                                    if next_page_button.is_visible(timeout=2000):
-                                        next_page_button.scroll_into_view_if_needed()
+                                    if next_page_button.is_displayed():
+                                        self.driver.execute_script("arguments[0].scrollIntoView(true);", next_page_button)
                                         time.sleep(random.uniform(0.5, 1.5))
                                         next_page_button.click()
                                         time.sleep(random.uniform(2, 4))
@@ -915,7 +750,9 @@ class WalmartDetailCrawler(BaseCrawler):
                                 print(f"[INFO] Reviews: {len(all_reviews)}")
                     except Exception as e:
                         print(f"[WARNING] Failed to extract reviews: {e}")
+            print(f"[DEBUG] 8/10 리뷰 상세 추출 완료")
 
+            print(f"[DEBUG] 9/10 데이터 결합 중...")
             # 결합된 데이터
             combined_data = product.copy()
             combined_data.update({
@@ -937,6 +774,7 @@ class WalmartDetailCrawler(BaseCrawler):
                 'crawl_strdatetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
 
+            print(f"[DEBUG] 10/10 크롤링 완료")
             return combined_data
 
         except Exception as e:
@@ -1071,7 +909,7 @@ class WalmartDetailCrawler(BaseCrawler):
                         saved_count = self.save_to_retail_com([combined_data])
                         total_saved += saved_count
 
-                    time.sleep(random.uniform(5, 8))  # 제품 간 대기 시간 증가
+                    time.sleep(random.uniform(2, 3))  # 제품 간 대기
 
                 except Exception as e:
                     print(f"[ERROR] Product {i} failed: {e}")
@@ -1087,18 +925,12 @@ class WalmartDetailCrawler(BaseCrawler):
             return False
 
         finally:
-            # 세션 저장 (CAPTCHA 통과 후 쿠키 유지)
-            self.save_storage_state()
-
-            # Playwright 리소스 정리
-            if self.page:
-                self.page.close()
-            if self.context:
-                self.context.close()
-            if self.browser:
-                self.browser.close()
-            if self.playwright:
-                self.playwright.stop()
+            # 브라우저 리소스 정리
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except:
+                    pass
             if self.db_conn:
                 self.db_conn.close()
             if self.standalone:
