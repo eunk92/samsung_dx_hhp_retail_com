@@ -51,6 +51,8 @@ class BestBuyBSRCrawler(BaseCrawler):
         self.calendar_week = None
         self.url_template = None
         self.current_rank = 0
+        self.db_urls = set()       # DB에 저장된 URL (Main에서 저장)
+        self.crawled_urls = set()  # BSR에서 수집한 URL (페이지 간 중복 방지)
 
         self.test_count = 3  # 테스트 모드
         self.max_products = 100  # 운영 모드
@@ -72,7 +74,34 @@ class BestBuyBSRCrawler(BaseCrawler):
         self.calendar_week = self.generate_calendar_week()
         self.cleanup_old_logs()
 
+        # DB에서 기존 URL 캐시 로드 (Main에서 저장된 URL)
+        self.db_urls = self.build_db_url_cache()
+
         return True
+
+    def build_db_url_cache(self):
+        """DB에서 현재 batch_id의 URL을 조회하여 set으로 반환"""
+        try:
+            cursor = self.db_conn.cursor()
+            query = """
+                SELECT product_url FROM bby_hhp_product_list
+                WHERE account_name = %s AND batch_id = %s
+            """
+            cursor.execute(query, (self.account_name, self.batch_id))
+            rows = cursor.fetchall()
+            cursor.close()
+
+            db_urls = set()
+            for (db_url,) in rows:
+                if db_url:
+                    db_urls.add(db_url)
+
+            print(f"[INFO] DB URL cache loaded: {len(db_urls)} URLs")
+            return db_urls
+
+        except Exception as e:
+            print(f"[WARNING] build_db_url_cache failed: {e}")
+            return set()
 
     def scroll_to_bottom(self):
         """스크롤: 205~350px씩 점진적 스크롤 → 페이지네이션 보이면 종료"""
@@ -138,8 +167,6 @@ class BestBuyBSRCrawler(BaseCrawler):
             products = []
             for idx, item in enumerate(base_containers, 1):
                 try:
-                    self.current_rank += 1
-
                     product_url_raw = self.safe_extract(item, 'product_url')
                     product_url = f"https://www.bestbuy.com{product_url_raw}" if product_url_raw and product_url_raw.startswith('/') else product_url_raw
 
@@ -156,7 +183,7 @@ class BestBuyBSRCrawler(BaseCrawler):
                         'delivery_availability': self.safe_extract(item, 'delivery_availability'),
                         'sku_status': self.safe_extract(item, 'sku_status'),
                         'promotion_type': self.safe_extract(item, 'promotion_type'),
-                        'bsr_rank': self.current_rank,
+                        'bsr_rank': 0,  # save_products()에서 재할당
                         'page_number': page_number,
                         'product_url': product_url,
                         'calendar_week': self.calendar_week,
@@ -180,49 +207,61 @@ class BestBuyBSRCrawler(BaseCrawler):
             return []
 
     def save_products(self, products):
-        """DB 저장: 중복 확인 → UPDATE(기존) / INSERT(신규) → 3-tier retry"""
+        """DB 저장: 캐시 기반 중복 체크 → bsr_rank 즉시 할당 → UPDATE 즉시 실행 / INSERT 배치 처리"""
         if not products:
-            return 0
+            return {'insert': 0, 'update': 0}
 
         try:
             cursor = self.db_conn.cursor()
             insert_count = 0
             update_count = 0
-
-            products_to_update = []
             products_to_insert = []
 
-            for product in products:
-                exists = self.check_product_exists(
-                    self.account_name,
-                    product['batch_id'],
-                    product['product_url']
-                )
-                if exists:
-                    products_to_update.append(product)
-                else:
-                    products_to_insert.append(product)
-
-            # UPDATE 처리
             update_query = """
                 UPDATE bby_hhp_product_list
                 SET bsr_rank = %s, bsr_page_number = %s
                 WHERE account_name = %s AND batch_id = %s AND product_url = %s
             """
 
-            for product in products_to_update:
-                try:
-                    cursor.execute(update_query, (
-                        product['bsr_rank'],
-                        product['page_number'],
-                        self.account_name,
-                        product['batch_id'],
-                        product['product_url']
-                    ))
-                    self.db_conn.commit()
-                    update_count += 1
-                except Exception:
-                    self.db_conn.rollback()
+            for product in products:
+                product_url = product.get('product_url')
+                if not product_url:
+                    continue
+
+                # 이미 수집한 URL → 스킵 (페이지 간 중복)
+                if product_url in self.crawled_urls:
+                    continue
+
+                # 수집 URL에 추가
+                self.crawled_urls.add(product_url)
+
+                # bsr_rank 즉시 할당
+                self.current_rank += 1
+                product['bsr_rank'] = self.current_rank
+
+                # DB에 있으면 즉시 UPDATE
+                if product_url in self.db_urls:
+                    try:
+                        cursor.execute(update_query, (
+                            product['bsr_rank'],
+                            product['page_number'],
+                            self.account_name,
+                            product['batch_id'],
+                            product['product_url']
+                        ))
+                        self.db_conn.commit()
+                        update_count += 1
+                    except Exception as e:
+                        print(f"[ERROR] UPDATE failed: {product_url[:50]}: {e}")
+                        self.db_conn.rollback()
+                else:
+                    # DB에 없으면 INSERT 대기열에 추가
+                    products_to_insert.append(product)
+
+            if not products_to_insert and update_count == 0:
+                print("[INFO] All products filtered (duplicate URLs)")
+                cursor.close()
+                return {'insert': 0, 'update': 0}
 
             # INSERT 처리 (3-tier retry: BATCH_SIZE → RETRY_SIZE → 1개씩)
             if products_to_insert:
