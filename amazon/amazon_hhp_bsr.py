@@ -24,6 +24,7 @@ import sys
 import os
 import time
 import random
+import re
 import traceback
 from datetime import datetime
 from lxml import html
@@ -52,7 +53,7 @@ class AmazonBSRCrawler(BaseCrawler):
         self.url_template = None
         self.cookies_loaded = False
         self.standalone = batch_id is None
-        self.test_count = 5  # 테스트 모드
+        self.test_count = 1  # 테스트 모드
         self.max_products = 100  # 운영 모드
 
     def initialize(self):
@@ -201,6 +202,65 @@ class AmazonBSRCrawler(BaseCrawler):
 
         return False
 
+    def normalize_amazon_url(self, url):
+        """Amazon URL을 /dp/ASIN 기준으로 정규화 (중복 판별용)"""
+        if not url:
+            return None
+
+        try:
+            # /dp/XXXXXXXXXX/ 이후 잘라내기
+            match = re.search(r'(https://www\.amazon\.com/[^/]+/dp/[A-Z0-9]{10})', url, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+            # /dp/로 바로 시작하는 경우
+            match = re.search(r'(https://www\.amazon\.com/dp/[A-Z0-9]{10})', url, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+            # 인코딩된 URL (%2Fdp%2F) 처리
+            match = re.search(r'(https://www\.amazon\.com/[^/]+%2Fdp%2F[A-Z0-9]{10})', url, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+            # 인코딩된 URL (%2Fdp%2F) - /dp/로 바로 시작하는 경우
+            match = re.search(r'(https://www\.amazon\.com%2Fdp%2F[A-Z0-9]{10})', url, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+            return url
+        except Exception:
+            return url
+
+    def check_product_exists_by_normalized_url(self, account_name, batch_id, normalized_url):
+        """정규화된 URL로 DB에서 제품 존재 여부 확인 (정규화된 URL 전체 비교)"""
+        if not normalized_url:
+            return None
+
+        try:
+            cursor = self.db_conn.cursor()
+
+            # DB의 모든 product_url을 가져와서 정규화 후 비교
+            query = """
+                SELECT product_url FROM amazon_hhp_product_list
+                WHERE account_name = %s AND batch_id = %s
+            """
+            cursor.execute(query, (account_name, batch_id))
+            rows = cursor.fetchall()
+            cursor.close()
+
+            for row in rows:
+                db_url = row[0]
+                db_normalized = self.normalize_amazon_url(db_url)
+                if db_normalized == normalized_url:
+                    return db_url  # 매칭된 원본 URL 반환
+
+            return None
+
+        except Exception as e:
+            print(f"[WARNING] check_product_exists_by_normalized_url failed: {e}")
+            return None
+
     def scroll_to_bottom(self):
         """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
         try:
@@ -309,7 +369,7 @@ class AmazonBSRCrawler(BaseCrawler):
             return []
 
     def save_products(self, products):
-        """DB 저장: 중복 확인 → UPDATE(기존) / INSERT(신규) → 3-tier retry"""
+        """DB 저장: 정규화된 URL로 중복 확인 → UPDATE(기존) / INSERT(신규) → 3-tier retry"""
         if not products:
             return {'insert': 0, 'update': 0}
 
@@ -322,17 +382,20 @@ class AmazonBSRCrawler(BaseCrawler):
             products_to_insert = []
 
             for product in products:
-                exists = self.check_product_exists(
+                # URL 정규화하여 중복 체크
+                normalized_url = self.normalize_amazon_url(product['product_url'])
+                exists = self.check_product_exists_by_normalized_url(
                     self.account_name,
                     product['batch_id'],
-                    product['product_url']
+                    normalized_url
                 )
                 if exists:
+                    product['matched_url'] = exists  # DB에서 매칭된 원본 URL 저장
                     products_to_update.append(product)
                 else:
                     products_to_insert.append(product)
 
-            # UPDATE 처리
+            # UPDATE 처리 (정규화된 URL로 매칭된 원본 URL 사용)
             update_query = """
                 UPDATE amazon_hhp_product_list
                 SET bsr_rank = %s, bsr_page_number = %s
@@ -346,7 +409,7 @@ class AmazonBSRCrawler(BaseCrawler):
                         product['page_number'],
                         self.account_name,
                         product['batch_id'],
-                        product['product_url']
+                        product['matched_url']  # DB에 저장된 원본 URL 사용
                     ))
                     self.db_conn.commit()
                     update_count += 1

@@ -99,18 +99,22 @@ class AmazonDetailCrawler(BaseCrawler):
         return True
 
     def scroll_to_bottom(self):
-        """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
+        """페이지 하단까지 스크롤 (전체 콘텐츠 로드용) - 70% 스크롤"""
         try:
+            # 전체 높이의 70%만 스크롤
+            total_height = self.driver.execute_script("return document.body.scrollHeight")
+            target_height = int(total_height * 0.7)
+
             current_position = 0
-            while True:
-                scroll_step = random.randint(250, 350)
+            while current_position < target_height:
+                scroll_step = random.randint(400, 600)
                 current_position += scroll_step
+                if current_position > target_height:
+                    current_position = target_height
                 self.driver.execute_script(f"window.scrollTo(0, {current_position});")
-                time.sleep(random.uniform(0.5, 0.7))
-                total_height = self.driver.execute_script("return document.body.scrollHeight")
-                if current_position >= total_height:
-                    break
-            time.sleep(random.uniform(1, 2))
+                time.sleep(random.uniform(0.3, 0.5))
+
+            time.sleep(random.uniform(0.5, 1))
         except Exception as e:
             print(f"[WARNING] Scroll failed: {e}")
             traceback.print_exc()
@@ -263,11 +267,11 @@ class AmazonDetailCrawler(BaseCrawler):
         # 2단계: URL 직접 접근 시도
         if self.is_throttled():
             print(f"[WARNING] Still throttled after {max_retries} refreshes. Trying direct URL access...")
-            time.sleep(random.uniform(20, 25))
+            time.sleep(random.uniform(10, 15))
 
             print(f"[INFO] Accessing URL directly: {url[:80]}...")
             self.driver.get(url)
-            time.sleep(random.uniform(10, 15))
+            time.sleep(random.uniform(5, 8))
 
             if not self.is_throttled():
                 print("[OK] Direct URL access successful")
@@ -310,11 +314,11 @@ class AmazonDetailCrawler(BaseCrawler):
             if is_sorry_page:
                 print(f"[WARNING] Sorry/Robot check page detected (attempt {attempt + 1}/{max_retries})")
                 if attempt < max_retries - 1:
-                    print(f"[INFO] Refreshing page in 3-5 seconds...")
-                    time.sleep(random.uniform(3, 5))
+                    print(f"[INFO] Refreshing page in 2-3 seconds...")
+                    time.sleep(random.uniform(2, 3))
                     self.driver.refresh()
                     print(f"[INFO] Page refreshed, waiting for load...")
-                    time.sleep(random.uniform(4, 6))
+                    time.sleep(random.uniform(3, 5))
                     continue
                 else:
                     print(f"[ERROR] Still sorry page after {max_retries} retries")
@@ -329,7 +333,7 @@ class AmazonDetailCrawler(BaseCrawler):
     def handle_captcha(self):
         """CAPTCHA 자동 해결"""
         try:
-            time.sleep(2)
+            time.sleep(1)
             page_html = self.driver.page_source.lower()
 
             captcha_keywords = ['captcha', 'robot', 'human verification', 'press & hold', 'press and hold']
@@ -512,7 +516,7 @@ class AmazonDetailCrawler(BaseCrawler):
                 return product
 
             self.driver.get(product_url)
-            time.sleep(random.uniform(8, 12))
+            time.sleep(random.uniform(5, 8))
 
             # Sorry/Robot check 페이지 처리
             if not self.check_and_handle_sorry_page(max_retries=3):
@@ -525,7 +529,7 @@ class AmazonDetailCrawler(BaseCrawler):
                 return product
 
             # 추가 대기 (봇 감지 후 안정화)
-            time.sleep(random.uniform(2, 4))
+            time.sleep(random.uniform(1, 2))
 
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
@@ -536,10 +540,17 @@ class AmazonDetailCrawler(BaseCrawler):
                 return product
 
             # CAPTCHA 체크 (봇 감지와 별도로 CAPTCHA 입력 필요한 경우)
-            if 'captcha' in page_html.lower():
+            # 특정 문구로 정확하게 감지 (단순 'captcha' 키워드는 오탐지 발생)
+            captcha_phrases = [
+                'enter the characters you see below',
+                'sorry, we just need to make sure you\'re not a robot',
+                'type the characters you see in this image',
+                'api-services-support@amazon.com',
+            ]
+            if any(phrase in page_html.lower() for phrase in captcha_phrases):
                 if self.handle_captcha():
                     self.driver.get(product_url)
-                    time.sleep(10)  # CAPTCHA 후 재로드 시에도 충분히 대기
+                    time.sleep(random.uniform(5, 8))  # CAPTCHA 후 재로드
                     page_html = self.driver.page_source
                     tree = html.fromstring(page_html)
                 else:
@@ -553,7 +564,9 @@ class AmazonDetailCrawler(BaseCrawler):
             # 기본값 초기화
             country = 'SEA'
             product_type = 'HHP'
-            item = self.extract_asin_from_url(product_url)
+            # 실제 로드된 URL에서 ASIN 추출 (리다이렉트 대응)
+            actual_url = self.driver.current_url
+            item = self.extract_asin_from_url(actual_url)
 
             # Trade-in 섹션은 JS로 늦게 로드될 수 있으므로 최신 HTML로 재파싱
             page_html = self.driver.page_source
@@ -576,39 +589,40 @@ class AmazonDetailCrawler(BaseCrawler):
 
             try:
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
-                time.sleep(2)
+                time.sleep(0.5)
 
                 additional_details_xpath = self.xpaths.get('additional_details_button', {}).get('xpath')
                 if additional_details_xpath:
-                    additional_details_button = WebDriverWait(self.driver, 5).until(
-                        EC.element_to_be_clickable((By.XPATH, additional_details_xpath))
-                    )
-                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", additional_details_button)
-                    time.sleep(1)
-                    additional_details_button.click()
-                    time.sleep(1)
-                    additional_details_found = True
-
-                item_details_xpath = self.xpaths.get('item_details_button', {}).get('xpath')
-                if item_details_xpath:
                     try:
-                        item_details_button = WebDriverWait(self.driver, 5).until(
-                            EC.element_to_be_clickable((By.XPATH, item_details_xpath))
+                        additional_details_button = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((By.XPATH, additional_details_xpath))
                         )
-                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", item_details_button)
-                        time.sleep(1)
-                        item_details_button.click()
-                        time.sleep(1)
-                    except Exception as e:
-                        print(f"[WARNING] Item details button click failed: {e}")
-                        traceback.print_exc()
+                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", additional_details_button)
+                        time.sleep(0.5)
+                        additional_details_button.click()
+                        time.sleep(0.5)
+                        additional_details_found = True
+
+                        item_details_xpath = self.xpaths.get('item_details_button', {}).get('xpath')
+                        if item_details_xpath:
+                            try:
+                                item_details_button = WebDriverWait(self.driver, 3).until(
+                                    EC.element_to_be_clickable((By.XPATH, item_details_xpath))
+                                )
+                                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", item_details_button)
+                                time.sleep(0.5)
+                                item_details_button.click()
+                                time.sleep(0.5)
+                            except Exception:
+                                pass  # Item details 버튼이 없을 수 있음
+                    except Exception:
+                        pass  # Additional details 버튼이 없을 수 있음
 
                 page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
 
             except Exception as e:
                 print(f"[WARNING] Additional details section failed: {e}")
-                traceback.print_exc()
 
             # HHP 스펙 및 랭크 추출
             if additional_details_found:
@@ -637,8 +651,10 @@ class AmazonDetailCrawler(BaseCrawler):
                 count_of_star_ratings = 'No customer reviews'
             else:
                 for attempt in range(1, MAX_RETRY + 1):
-                    page_html = self.driver.page_source
-                    tree = html.fromstring(page_html)
+                    # 첫 시도는 기존 tree 사용, 재시도 시에만 재파싱
+                    if attempt > 1:
+                        page_html = self.driver.page_source
+                        tree = html.fromstring(page_html)
 
                     if count_of_reviews is None:
                         count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
@@ -657,7 +673,7 @@ class AmazonDetailCrawler(BaseCrawler):
                         break
 
                     if attempt < MAX_RETRY:
-                        time.sleep(2)
+                        time.sleep(1)
                     else:
                         # 마지막 시도에서도 실패
                         missing = []
@@ -671,15 +687,15 @@ class AmazonDetailCrawler(BaseCrawler):
             summarized_review_content = None
             try:
                 self.driver.execute_script("window.scrollTo(0, 0);")
-                time.sleep(1)
+                time.sleep(0.5)
 
                 review_link_xpath = self.xpaths.get('review_link', {}).get('xpath')
                 if review_link_xpath:
-                    review_link = WebDriverWait(self.driver, 5).until(
+                    review_link = WebDriverWait(self.driver, 3).until(
                         EC.element_to_be_clickable((By.XPATH, review_link_xpath))
                     )
                     review_link.click()
-                    time.sleep(2)
+                    time.sleep(1)
 
                 page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
@@ -864,7 +880,7 @@ class AmazonDetailCrawler(BaseCrawler):
                         total_saved += saved_count
                         crawled_products = []
 
-                    time.sleep(random.uniform(3, 7))
+                    time.sleep(random.uniform(3, 5))
 
                 except Exception as e:
                     print(f"[ERROR] Product {i} failed: {e}")

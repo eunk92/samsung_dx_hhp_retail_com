@@ -26,6 +26,7 @@ import sys
 import os
 import time
 import random
+import re
 import traceback
 from datetime import datetime
 from lxml import html
@@ -55,8 +56,9 @@ class AmazonMainCrawler(BaseCrawler):
         self.cookies_loaded = False
         self.current_rank = 0
         self.standalone = batch_id is None
-        self.test_count = 5  # 테스트 모드
+        self.test_count = 1  # 테스트 모드
         self.max_products = 300  # 운영 모드
+        self.saved_urls = set()  # 중복 URL 추적용
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 1개월 전 로그 정리"""
@@ -204,6 +206,36 @@ class AmazonMainCrawler(BaseCrawler):
 
         return False
 
+    def normalize_amazon_url(self, url):
+        """Amazon URL을 /dp/ASIN 기준으로 정규화 (중복 판별용)"""
+        if not url:
+            return None
+
+        try:
+            # /dp/XXXXXXXXXX/ 이후 잘라내기
+            match = re.search(r'(https://www\.amazon\.com/[^/]+/dp/[A-Z0-9]{10})', url, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+            # /dp/로 바로 시작하는 경우
+            match = re.search(r'(https://www\.amazon\.com/dp/[A-Z0-9]{10})', url, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+            # 인코딩된 URL (%2Fdp%2F) 처리
+            match = re.search(r'(https://www\.amazon\.com/[^/]+%2Fdp%2F[A-Z0-9]{10})', url, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+            # 인코딩된 URL (%2Fdp%2F) - /dp/로 바로 시작하는 경우
+            match = re.search(r'(https://www\.amazon\.com%2Fdp%2F[A-Z0-9]{10})', url, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+            return url
+        except Exception:
+            return url
+
     def scroll_to_bottom(self):
         """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
         try:
@@ -274,8 +306,6 @@ class AmazonMainCrawler(BaseCrawler):
             products = []
             for idx, item in enumerate(base_containers, 1):
                 try:
-                    self.current_rank += 1
-
                     product_url_raw = self.safe_extract(item, 'product_url')
                     product_url = f"https://www.amazon.com{product_url_raw}" if product_url_raw and product_url_raw.startswith('/') else product_url_raw
 
@@ -289,7 +319,7 @@ class AmazonMainCrawler(BaseCrawler):
                         'shipping_info': self.safe_extract_join(item, 'shipping_info', separator=", "),
                         'available_quantity_for_purchase': self.safe_extract(item, 'available_quantity_for_purchase'),
                         'discount_type': self.safe_extract(item, 'discount_type'),
-                        'main_rank': self.current_rank,
+                        'main_rank': 0,  # save_products()에서 재할당
                         'page_number': page_number,
                         'product_url': product_url,
                         'calendar_week': self.calendar_week,
@@ -313,8 +343,33 @@ class AmazonMainCrawler(BaseCrawler):
             return []
 
     def save_products(self, products):
-        """DB 저장: BATCH_SIZE 배치 → RETRY_SIZE 배치 → 1개씩 (3-tier retry)"""
+        """DB 저장: 중복 제거 → BATCH_SIZE 배치 → RETRY_SIZE 배치 → 1개씩 (3-tier retry)"""
         if not products:
+            return 0
+
+        # 중복 제거 및 rank 재할당
+        unique_products = []
+        for product in products:
+            product_url = product.get('product_url')
+            normalized_url = self.normalize_amazon_url(product_url)
+
+            if normalized_url and normalized_url in self.saved_urls:
+                print(f"[SKIP] 중복 URL: {product.get('retailer_sku_name', 'N/A')[:40]}...")
+                continue
+
+            if normalized_url:
+                self.saved_urls.add(normalized_url)
+            unique_products.append(product)
+
+        # rank 재할당 (중복 제거 후 순차적으로)
+        for i, product in enumerate(unique_products):
+            product['main_rank'] = self.current_rank + i + 1
+
+        # current_rank 업데이트
+        if unique_products:
+            self.current_rank += len(unique_products)
+
+        if not unique_products:
             return 0
 
         try:
@@ -360,9 +415,9 @@ class AmazonMainCrawler(BaseCrawler):
                 self.db_conn.commit()
                 return len(batch_products)
 
-            for batch_start in range(0, len(products), BATCH_SIZE):
-                batch_end = min(batch_start + BATCH_SIZE, len(products))
-                batch_products = products[batch_start:batch_end]
+            for batch_start in range(0, len(unique_products), BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, len(unique_products))
+                batch_products = unique_products[batch_start:batch_end]
 
                 try:
                     total_saved += save_batch(batch_products)
