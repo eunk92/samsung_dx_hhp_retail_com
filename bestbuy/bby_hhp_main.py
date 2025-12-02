@@ -28,9 +28,6 @@ import random
 import traceback
 from datetime import datetime
 from lxml import html
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 # 공통 환경 설정 (작업 디렉토리, 한글 출력, 경로 설정)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -57,6 +54,7 @@ class BestBuyMainCrawler(BaseCrawler):
 
         self.test_count = 3  # 테스트 모드
         self.max_products = 300  # 운영 모드
+        self.max_pages = 20  # 최대 페이지 수
         self.current_rank = 0
         self.saved_urls = set()  # 중복 URL 추적용
 
@@ -205,11 +203,13 @@ class BestBuyMainCrawler(BaseCrawler):
         if not products:
             return 0
 
-        # 중복 URL 필터링
+        # 중복 URL 필터링 (URL이 없으면 그냥 저장)
         unique_products = []
         for product in products:
             product_url = product.get('product_url')
-            if product_url and product_url not in self.saved_urls:
+            if not product_url:
+                unique_products.append(product)
+            elif product_url not in self.saved_urls:
                 self.saved_urls.add(product_url)
                 unique_products.append(product)
 
@@ -324,7 +324,7 @@ class BestBuyMainCrawler(BaseCrawler):
             self.current_rank = 0
             page_num = 1
 
-            while total_products < target_products:
+            while total_products < target_products and page_num <= self.max_pages:
                 products = self.crawl_page(page_num)
 
                 if not products:
@@ -342,6 +342,9 @@ class BestBuyMainCrawler(BaseCrawler):
 
                 time.sleep(random.uniform(28, 32))
                 page_num += 1
+
+            if page_num > self.max_pages:
+                print(f"[INFO] Max pages ({self.max_pages}) reached")
 
             print(f"[DONE] Page: {page_num}, Saved: {total_products}, batch_id: {self.batch_id}")
             return True

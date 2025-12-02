@@ -56,6 +56,7 @@ class BestBuyBSRCrawler(BaseCrawler):
 
         self.test_count = 3  # 테스트 모드
         self.max_products = 100  # 운영 모드
+        self.max_pages = 10  # 최대 페이지 수
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 로그 정리"""
@@ -225,7 +226,12 @@ class BestBuyBSRCrawler(BaseCrawler):
 
             for product in products:
                 product_url = product.get('product_url')
+
+                # URL이 없으면 중복 체크 없이 INSERT 대기열에 추가
                 if not product_url:
+                    self.current_rank += 1
+                    product['bsr_rank'] = self.current_rank
+                    products_to_insert.append(product)
                     continue
 
                 # 이미 수집한 URL → 스킵 (페이지 간 중복)
@@ -361,7 +367,7 @@ class BestBuyBSRCrawler(BaseCrawler):
             self.current_rank = 0
             page_num = 1
 
-            while (total_insert + total_update) < target_products:
+            while (total_insert + total_update) < target_products and page_num <= self.max_pages:
                 products = self.crawl_page(page_num)
 
                 if not products:
@@ -380,6 +386,9 @@ class BestBuyBSRCrawler(BaseCrawler):
 
                 time.sleep(30)
                 page_num += 1
+
+            if page_num > self.max_pages:
+                print(f"[INFO] Max pages ({self.max_pages}) reached")
 
             print(f"[DONE] Page: {page_num}, Update: {total_update}, Insert: {total_insert}, batch_id: {self.batch_id}")
             return True
