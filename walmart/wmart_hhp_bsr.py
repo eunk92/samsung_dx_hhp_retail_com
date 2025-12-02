@@ -439,7 +439,7 @@ class WalmartBSRCrawler(BaseCrawler):
             return 0
 
         try:
-            # 중복 URL 제거 및 bsr_rank 재할당
+            # 중복 URL 제거 및 bsr_rank 할당
             unique_products = []
             for product in products:
                 product_url = product.get('product_url')
@@ -448,15 +448,11 @@ class WalmartBSRCrawler(BaseCrawler):
                     continue
                 if product_url:
                     self.saved_urls.add(product_url)
+
+                # rank 할당 (중복 제거된 제품에만 순차적으로)
+                self.current_rank += 1
+                product['bsr_rank'] = self.current_rank
                 unique_products.append(product)
-
-            # bsr_rank 재할당 (중복 제거 후 순차적으로)
-            for i, product in enumerate(unique_products):
-                product['bsr_rank'] = self.current_rank + i + 1
-
-            # current_rank 업데이트
-            if unique_products:
-                self.current_rank += len(unique_products)
 
             cursor = self.db_conn.cursor()
             insert_count = 0

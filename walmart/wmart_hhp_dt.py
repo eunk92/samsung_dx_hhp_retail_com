@@ -334,7 +334,7 @@ class WalmartDetailCrawler(BaseCrawler):
                     crawl_strdatetime, page_type
                 FROM wmart_hhp_product_list
                 WHERE account_name = %s AND batch_id = %s AND product_url IS NOT NULL
-                ORDER BY product_url, id
+                ORDER BY id
             """
 
             cursor.execute(query, (self.account_name, self.batch_id))

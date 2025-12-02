@@ -696,8 +696,6 @@ class WalmartMainCrawler(BaseCrawler):
             products = []
             for idx, item in enumerate(base_containers, 1):
                 try:
-                    self.current_rank += 1
-
                     product_url_raw = self.safe_extract(item, 'product_url')
                     product_url = f"https://www.walmart.com{product_url_raw}" if product_url_raw and product_url_raw.startswith('/') else product_url_raw
 
@@ -727,7 +725,7 @@ class WalmartMainCrawler(BaseCrawler):
                         'retailer_membership_discounts': retailer_membership_discounts,
                         'available_quantity_for_purchase': self.safe_extract(item, 'available_quantity_for_purchase'),
                         'inventory_status': self.safe_extract(item, 'inventory_status'),
-                        'main_rank': self.current_rank,
+                        'main_rank': 0,  # save_products()에서 재할당
                         'page_number': page_number,
                         'product_url': product_url,
                         'calendar_week': self.calendar_week,
@@ -755,7 +753,7 @@ class WalmartMainCrawler(BaseCrawler):
         if not products:
             return 0
 
-        # 중복 제거 및 rank 재할당
+        # 중복 제거 및 rank 할당
         unique_products = []
         for product in products:
             product_url = product.get('product_url')
@@ -764,16 +762,11 @@ class WalmartMainCrawler(BaseCrawler):
                 continue
             if product_url:
                 self.saved_urls.add(product_url)
+
+            # rank 할당 (중복 제거된 제품에만 순차적으로)
+            self.current_rank += 1
+            product['main_rank'] = self.current_rank
             unique_products.append(product)
-
-        # rank 재할당 (중복 제거 후 순차적으로)
-        for i, product in enumerate(unique_products):
-            # current_rank 기준으로 순차 할당
-            product['main_rank'] = self.current_rank + i + 1
-
-        # current_rank 업데이트
-        if unique_products:
-            self.current_rank += len(unique_products)
 
         if not unique_products:
             return 0
