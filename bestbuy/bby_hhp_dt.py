@@ -135,6 +135,9 @@ class BestBuyDetailCrawler(BaseCrawler):
             if not parts:
                 return None
             item = parts[-1]
+            # .p 확장자 제거 (예: 6507560.p → 6507560)
+            if item.endswith('.p'):
+                item = item[:-2]
             return item if item else None
         except Exception:
             return None
@@ -152,7 +155,9 @@ class BestBuyDetailCrawler(BaseCrawler):
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
 
-            item = self.extract_item_from_url(product_url)
+            # 실제 페이지 URL에서 item 추출 (리다이렉트 고려)
+            actual_url = self.driver.current_url
+            item = self.extract_item_from_url(actual_url)
 
             # ========== 1단계: 상단 정보 추출 (최대 3회 재시도) ==========
             top_star_rating = None
