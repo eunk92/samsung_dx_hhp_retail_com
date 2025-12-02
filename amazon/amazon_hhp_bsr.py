@@ -232,15 +232,10 @@ class AmazonBSRCrawler(BaseCrawler):
         except Exception:
             return url
 
-    def check_product_exists_by_normalized_url(self, account_name, batch_id, normalized_url):
-        """정규화된 URL로 DB에서 제품 존재 여부 확인 (정규화된 URL 전체 비교)"""
-        if not normalized_url:
-            return None
-
+    def build_existing_urls_cache(self, account_name, batch_id):
+        """DB에서 기존 URL을 조회하여 정규화 URL → 원본 URL 딕셔너리 생성 (1회 조회)"""
         try:
             cursor = self.db_conn.cursor()
-
-            # DB의 모든 product_url을 가져와서 정규화 후 비교
             query = """
                 SELECT product_url FROM amazon_hhp_product_list
                 WHERE account_name = %s AND batch_id = %s
@@ -249,17 +244,17 @@ class AmazonBSRCrawler(BaseCrawler):
             rows = cursor.fetchall()
             cursor.close()
 
-            for row in rows:
-                db_url = row[0]
-                db_normalized = self.normalize_amazon_url(db_url)
-                if db_normalized == normalized_url:
-                    return db_url  # 매칭된 원본 URL 반환
+            existing_urls = {}
+            for (db_url,) in rows:
+                normalized = self.normalize_amazon_url(db_url)
+                if normalized:
+                    existing_urls[normalized] = db_url
 
-            return None
+            return existing_urls
 
         except Exception as e:
-            print(f"[WARNING] check_product_exists_by_normalized_url failed: {e}")
-            return None
+            print(f"[WARNING] build_existing_urls_cache failed: {e}")
+            return {}
 
     def scroll_to_bottom(self):
         """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
@@ -381,16 +376,15 @@ class AmazonBSRCrawler(BaseCrawler):
             products_to_update = []
             products_to_insert = []
 
+            # 1회 DB 조회로 기존 URL 캐시 생성
+            existing_urls = self.build_existing_urls_cache(self.account_name, self.batch_id)
+
             for product in products:
-                # URL 정규화하여 중복 체크
+                # URL 정규화하여 중복 체크 (O(1) 딕셔너리 조회)
                 normalized_url = self.normalize_amazon_url(product['product_url'])
-                exists = self.check_product_exists_by_normalized_url(
-                    self.account_name,
-                    product['batch_id'],
-                    normalized_url
-                )
-                if exists:
-                    product['matched_url'] = exists  # DB에서 매칭된 원본 URL 저장
+                matched_url = existing_urls.get(normalized_url)
+                if matched_url:
+                    product['matched_url'] = matched_url  # DB에서 매칭된 원본 URL 저장
                     products_to_update.append(product)
                 else:
                     products_to_insert.append(product)
@@ -413,7 +407,8 @@ class AmazonBSRCrawler(BaseCrawler):
                     ))
                     self.db_conn.commit()
                     update_count += 1
-                except Exception:
+                except Exception as e:
+                    print(f"[WARNING] UPDATE failed: {product.get('matched_url', 'N/A')[:50]}: {e}")
                     self.db_conn.rollback()
 
             # INSERT 처리 (3-tier retry)
@@ -520,7 +515,7 @@ class AmazonBSRCrawler(BaseCrawler):
                     if (total_insert + total_update) >= target_products:
                         break
 
-                time.sleep(random.uniform(28, 32))
+                time.sleep(random.uniform(10, 15))
                 page_num += 1
 
             print(f"[DONE] Page: {page_num}, Update: {total_update}, Insert: {total_insert}, batch_id: {self.batch_id}")
