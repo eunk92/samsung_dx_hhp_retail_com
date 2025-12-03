@@ -128,20 +128,52 @@ class WalmartDetailCrawler(BaseCrawler):
             print(f"[WARNING] CAPTCHA handling error: {e}")
             return True
 
+    def extract_rating_from_header(self, tree):
+        """상단 reviews-and-ratings 영역에서 별점과 별점 수 추출
+        예: '4.3 stars out of 8968 reviews' → ('4.3', '8968')
+        """
+        try:
+            xpath = self.xpaths.get('header_rating', {}).get('xpath')
+            if not xpath:
+                return None, None
+            results = tree.xpath(xpath)
+
+            if results:
+                text = results[0].strip()
+                # 정규식: "4.3 stars out of 8968 reviews"
+                match = re.match(r'([\d.]+)\s*stars?\s*out\s*of\s*([\d,]+)\s*reviews?', text, re.IGNORECASE)
+                if match:
+                    star_rating = match.group(1)  # "4.3"
+                    try:
+                        count_of_star_ratings = '{:,}'.format(int(match.group(2).replace(',', '')))  # "8,968"
+                    except ValueError:
+                        count_of_star_ratings = match.group(2)  # 원본 값 유지
+                    return star_rating, count_of_star_ratings
+
+            return None, None
+        except Exception as e:
+            print(f"[WARNING] extract_rating_from_header failed: {e}")
+            traceback.print_exc()
+            return None, None
+
     def extract_ratings_count(self, tree):
-        """Walmart 별점 개수 추출 (예: '1,234 ratings' → '1234')"""
+        """Walmart 별점 개수 추출 (예: '1,234 ratings' → '1,234', '12.5K ratings' → '12.5K')"""
         text = self.safe_extract(tree, 'count_of_star_ratings')
-        result = extract_numeric_value(text, include_comma=True, include_decimal=False)
-        if result:
-            return result.replace(',', '')
+        if text:
+            # 12.5K, 3.5K 등 K 포함 숫자 또는 1,234 등 쉼표 포함 숫자 추출
+            match = re.search(r'([\d,]+\.?\d*K?)', text, re.IGNORECASE)
+            if match:
+                return match.group(1)
         return None
 
     def extract_review_count(self, tree):
-        """Walmart 리뷰 개수 추출 (예: '3,572 reviews' → '3572')"""
+        """Walmart 리뷰 개수 추출 (예: '3,572 reviews' → '3,572', '3.5K reviews' → '3.5K')"""
         text = self.safe_extract(tree, 'count_of_reviews')
-        result = extract_numeric_value(text, include_comma=True, include_decimal=False)
-        if result:
-            return result.replace(',', '')
+        if text:
+            # 3.5K, 12.5K 등 K 포함 숫자 또는 3,572 등 쉼표 포함 숫자 추출
+            match = re.search(r'([\d,]+\.?\d*K?)', text, re.IGNORECASE)
+            if match:
+                return match.group(1)
         return None
 
     def extract_star_rating(self, tree):
@@ -402,7 +434,6 @@ class WalmartDetailCrawler(BaseCrawler):
                 print("[WARNING] Product URL is missing")
                 return product
 
-            print(f"[DEBUG] 1/10 페이지 로드 시작...")
             self.driver.get(product_url)
             time.sleep(random.uniform(3, 5))
 
@@ -415,9 +446,7 @@ class WalmartDetailCrawler(BaseCrawler):
                 time.sleep(random.uniform(1, 2))
 
             # 전체 콘텐츠 로드: 하단까지 스크롤 → 배너 닫기 → 맨 위로 복귀
-            print(f"[DEBUG] 2/10 scroll_to_bottom 시작...")
             self.scroll_to_bottom()
-            print(f"[DEBUG] 2/10 scroll_to_bottom 완료")
             self.close_banner()
             self.driver.execute_script("window.scrollTo(0, 0)")
             time.sleep(random.uniform(0.5, 1))
@@ -426,30 +455,31 @@ class WalmartDetailCrawler(BaseCrawler):
             tree = html.fromstring(page_html)
 
             # item ID 추출 (리다이렉트된 실제 URL에서)
-            print(f"[DEBUG] 3/10 item 추출...")
             actual_url = self.driver.current_url
             item = self.extract_item(actual_url)
 
-            # 추가 필드 추출
-            print(f"[DEBUG] 4/10 기본 필드 추출...")
-            number_of_ppl_purchased_yesterday = self.safe_extract(tree, 'number_of_ppl_purchased_yesterday')
-            number_of_ppl_added_to_carts = self.safe_extract(tree, 'number_of_ppl_added_to_carts')
-            sku_popularity = self.safe_extract_join(tree, 'sku_popularity', separator=", ")
-            savings = self.safe_extract(tree, 'savings')
-            discount_type = self.safe_extract(tree, 'discount_type')
-            print(f"[DEBUG] 4/10 기본 필드 완료")
-
-             # "No ratings yet" 체크 (리뷰 없는 상품)
+            # "No ratings yet" 체크 (리뷰 없는 상품)
             no_ratings_yet = False
-            no_ratings_xpath = self.xpaths.get('no_ratings_yet', {}).get('xpath')
-            no_ratings_elements = tree.xpath(no_ratings_xpath) if no_ratings_xpath else []
-            if no_ratings_elements:
-                no_ratings_text = no_ratings_elements[0].text_content().strip()
+            no_ratings_text = self.safe_extract(tree, 'no_ratings_yet')
+            if no_ratings_text:
                 # 괄호만 제거 (괄호 안 내용은 유지)
                 no_ratings_text_clean = no_ratings_text.replace('(', '').replace(')', '').strip()
                 if 'No ratings yet' in no_ratings_text_clean:
                     no_ratings_yet = True
                     print("[INFO] No ratings yet 감지 - 리뷰 필드 스킵 예정")
+
+            # 상단 별점/별점 수 추출 (No ratings yet이 아닌 경우에만)
+            header_star_rating = None
+            header_count_of_star_ratings = None
+            if not no_ratings_yet:
+                header_star_rating, header_count_of_star_ratings = self.extract_rating_from_header(tree)
+
+            # 추가 필드 추출
+            number_of_ppl_purchased_yesterday = self.safe_extract(tree, 'number_of_ppl_purchased_yesterday')
+            number_of_ppl_added_to_carts = self.safe_extract(tree, 'number_of_ppl_added_to_carts')
+            sku_popularity = self.safe_extract_join(tree, 'sku_popularity', separator=", ")
+            savings = self.safe_extract(tree, 'savings')
+            discount_type = self.safe_extract(tree, 'discount_type')
 
             # shipping_info 추출 (첫 번째 shipping-tile만 사용)
             shipping_info = None
@@ -475,7 +505,6 @@ class WalmartDetailCrawler(BaseCrawler):
                 pass
 
             # 스펙 정보 추출
-            print(f"[DEBUG] 5/10 spec_button 처리 시작...")
             hhp_carrier = None
             hhp_storage = None
             hhp_color = None
@@ -546,10 +575,8 @@ class WalmartDetailCrawler(BaseCrawler):
             except Exception as e:
                 print(f"[ERROR] spec_button 처리 실패: {e}")
                 traceback.print_exc()
-            print(f"[DEBUG] 5/10 spec_button 완료")
 
             # 유사 제품 추출 (빠른 스크롤로 최적화)
-            print(f"[DEBUG] 6/10 similar_products 시작...")
             retailer_sku_name_similar = None
             similar_products_container_xpath = self.xpaths.get('similar_products_container', {}).get('xpath')
 
@@ -593,10 +620,8 @@ class WalmartDetailCrawler(BaseCrawler):
                         retailer_sku_name_similar = ' ||| '.join(similar_product_names) if similar_product_names else None
                 except Exception:
                     pass
-            print(f"[DEBUG] 6/10 similar_products 완료")
 
             # 리뷰 관련 필드
-            print(f"[DEBUG] 7/10 리뷰 필드 추출 시작...")
             count_of_reviews = None
             star_rating = None
             count_of_star_ratings = None
@@ -607,13 +632,20 @@ class WalmartDetailCrawler(BaseCrawler):
                 star_rating = 'No ratings yet'
                 count_of_star_ratings = 'No ratings yet'
             else:
+                # 1. 스크롤 전 상단에서 추출한 값 우선 사용
+                star_rating = header_star_rating
+                count_of_star_ratings = header_count_of_star_ratings
+
                 for retry in range(3):
                     page_html = self.driver.page_source
                     tree = html.fromstring(page_html)
 
+                    # 2. 상단 추출 실패 시 기존 하단 방식으로 추출
+                    if star_rating is None or count_of_star_ratings is None:
+                        star_rating = self.extract_star_rating(tree)
+                        count_of_star_ratings = self.extract_ratings_count(tree)
+
                     count_of_reviews = self.extract_review_count(tree)
-                    star_rating = self.extract_star_rating(tree)
-                    count_of_star_ratings = self.extract_ratings_count(tree)
 
                     # 3개 필드 모두 추출 성공 시 종료
                     if count_of_reviews is not None and star_rating is not None and count_of_star_ratings is not None:
@@ -623,10 +655,8 @@ class WalmartDetailCrawler(BaseCrawler):
                     if retry < 2:
                         print(f"[WARNING] 리뷰 필드 추출 실패 (시도 {retry + 1}/3) - 재시도 중...")
                         time.sleep(random.uniform(1, 2))
-            print(f"[DEBUG] 7/10 리뷰 필드 완료")
 
             # 리뷰 상세 추출
-            print(f"[DEBUG] 8/10 리뷰 상세 추출 시작...")
             detailed_review_content = None
             reviews_button_xpath = self.xpaths.get('reviews_button', {}).get('xpath')
 
@@ -646,10 +676,9 @@ class WalmartDetailCrawler(BaseCrawler):
                 reviews_button_xpaths = [reviews_button_xpath] + fallback_xpaths
 
                 scroll_count = 0
-                max_scroll_attempts = 20  # 무한 스크롤 방지
+                max_scroll_attempts = 50  # 무한 스크롤 방지
                 while current_position < scroll_height and scroll_count < max_scroll_attempts:
                     scroll_count += 1
-                    print(f"[DEBUG] 8/10 리뷰버튼 스크롤 {scroll_count}/{max_scroll_attempts} (pos={current_position}/{scroll_height})")
 
                     # 현재 위치에서 버튼 찾기 시도 (scrollIntoView 없이)
                     for xpath in reviews_button_xpaths:
@@ -661,7 +690,6 @@ class WalmartDetailCrawler(BaseCrawler):
                                     # 먼저 일반 클릭 시도
                                     review_button.click()
                                     review_button_found = True
-                                    print(f"[DEBUG] 8/10 리뷰버튼 클릭 성공")
                                     time.sleep(random.uniform(3, 7))
                                     break
                                 except Exception:
@@ -671,7 +699,6 @@ class WalmartDetailCrawler(BaseCrawler):
                                         time.sleep(random.uniform(0.5, 1))
                                         review_button.click()
                                         review_button_found = True
-                                        print(f"[DEBUG] 8/10 리뷰버튼 클릭 성공 (scrollIntoView 후)")
                                         time.sleep(random.uniform(3, 7))
                                         break
                                     except Exception:
@@ -679,7 +706,6 @@ class WalmartDetailCrawler(BaseCrawler):
                                         try:
                                             self.driver.execute_script("arguments[0].click();", review_button)
                                             review_button_found = True
-                                            print(f"[DEBUG] 8/10 리뷰버튼 클릭 성공 (JS)")
                                             time.sleep(random.uniform(3, 7))
                                             break
                                         except Exception:
@@ -695,9 +721,6 @@ class WalmartDetailCrawler(BaseCrawler):
                     current_position += scroll_step
                     self.driver.execute_script(f"window.scrollTo(0, {current_position})")
                     time.sleep(random.uniform(0.3, 0.5))
-
-                if scroll_count >= max_scroll_attempts:
-                    print(f"[DEBUG] 8/10 리뷰버튼 스크롤 최대 횟수 도달, 스킵")
 
                 if review_button_found:
                     try:
@@ -763,9 +786,8 @@ class WalmartDetailCrawler(BaseCrawler):
                                 print(f"[INFO] Reviews: {len(all_reviews)}")
                     except Exception as e:
                         print(f"[WARNING] Failed to extract reviews: {e}")
-            print(f"[DEBUG] 8/10 리뷰 상세 추출 완료")
 
-            print(f"[DEBUG] 9/10 데이터 결합 중...")
+
             # 결합된 데이터
             combined_data = product.copy()
             combined_data.update({
@@ -787,7 +809,6 @@ class WalmartDetailCrawler(BaseCrawler):
                 'crawl_strdatetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
 
-            print(f"[DEBUG] 10/10 크롤링 완료")
             return combined_data
 
         except Exception as e:
