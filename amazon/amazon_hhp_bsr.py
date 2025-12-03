@@ -120,54 +120,60 @@ class AmazonBSRCrawler(BaseCrawler):
             print(f"[ERROR] Browser restart failed: {e}")
             return False
 
-    def check_and_handle_throttling(self, page_number, url, max_retries=2, max_browser_restarts=3):
-        """쓰로틀링 메시지 감지 및 처리"""
-        # 1단계: 새로고침 재시도
-        for retry in range(max_retries):
-            if self.is_throttled():
-                print(f"[WARNING] Throttling detected on page {page_number} (refresh attempt {retry + 1}/{max_retries})")
+    def check_and_handle_throttling(self, page_number, url, max_refresh_retries=10, max_browser_restarts=3):
+        """쓰로틀링 메시지 감지 및 처리
+
+        흐름:
+        1. 쓰로틀링 감지 → 새로고침 최대 10회
+        2. 10회 후에도 쓰로틀링 → URL 직접 접근
+        3. 여전히 쓰로틀링 → 크롬 재시작
+        4. 재시작 후 다시 새로고침 10회 → URL 직접 접근 반복
+        5. 크롬 재시작 최대 3회
+        """
+        for restart_attempt in range(max_browser_restarts + 1):  # 0: 초기, 1~3: 재시작
+            # 새로고침 10회 시도
+            for retry in range(max_refresh_retries):
+                if not self.is_throttled():
+                    if retry > 0 or restart_attempt > 0:
+                        print("[OK] No throttling detected")
+                    return True
+
+                print(f"[WARNING] Throttling detected on page {page_number} (refresh {retry + 1}/{max_refresh_retries}, browser restart {restart_attempt}/{max_browser_restarts})")
                 print("[INFO] Waiting before refresh...")
-                time.sleep(random.uniform(15, 20))
+                time.sleep(random.uniform(2, 3))
 
                 print("[INFO] Refreshing page...")
                 self.driver.refresh()
-                time.sleep(random.uniform(8, 12))
-            else:
-                print("[OK] No throttling detected")
-                return True
+                time.sleep(random.uniform(3, 5))
 
-        # 2단계: URL 직접 접근 시도
+            # 새로고침 10회 후에도 쓰로틀링 → URL 직접 접근
+            if self.is_throttled():
+                print(f"[WARNING] Still throttled after {max_refresh_retries} refreshes. Trying direct URL access...")
+                time.sleep(random.uniform(8, 10))
+
+                print(f"[INFO] Accessing URL directly: {url[:80]}...")
+                self.driver.get(url)
+                time.sleep(random.uniform(8, 10))
+
+                if not self.is_throttled():
+                    print("[OK] Direct URL access successful")
+                    return True
+
+            # URL 직접 접근 후에도 쓰로틀링 → 크롬 재시작 (마지막 시도가 아닐 때만)
+            if self.is_throttled() and restart_attempt < max_browser_restarts:
+                print(f"[WARNING] Still throttled after URL access. Restarting browser (attempt {restart_attempt + 1}/{max_browser_restarts})...")
+
+                if not self.restart_browser(url):
+                    print(f"[ERROR] Browser restart attempt {restart_attempt + 1} failed")
+                    continue
+
+                time.sleep(random.uniform(5, 8))
+
         if self.is_throttled():
-            print(f"[WARNING] Still throttled after {max_retries} refreshes. Trying direct URL access...")
-            time.sleep(random.uniform(20, 25))
+            print(f"[ERROR] Still throttled after all attempts")
+            return False
 
-            print(f"[INFO] Accessing URL directly: {url[:80]}...")
-            self.driver.get(url)
-            time.sleep(random.uniform(10, 15))
-
-            if not self.is_throttled():
-                print("[OK] Direct URL access successful")
-                return True
-
-        # 3단계: 브라우저 재시작 시도
-        for restart_attempt in range(max_browser_restarts):
-            if not self.is_throttled():
-                return True
-
-            print(f"[WARNING] Still throttled. Restarting browser (attempt {restart_attempt + 1}/{max_browser_restarts})...")
-
-            if not self.restart_browser(url):
-                print(f"[ERROR] Browser restart attempt {restart_attempt + 1} failed")
-                continue
-
-            time.sleep(random.uniform(5, 8))
-
-            if not self.is_throttled():
-                print(f"[OK] Browser restart successful on attempt {restart_attempt + 1}")
-                return True
-
-        print(f"[ERROR] Still throttled after {max_browser_restarts} browser restarts")
-        return False
+        return True
 
     def check_and_handle_sorry_page(self, max_retries=3):
         """Sorry/Robot check 페이지 감지 및 처리"""
@@ -256,11 +262,11 @@ class AmazonBSRCrawler(BaseCrawler):
             print(f"[WARNING] build_existing_urls_cache failed: {e}")
             return {}
 
-    def scroll_to_bottom(self):
-        """페이지 하단까지 스크롤 (전체 콘텐츠 로드용)"""
+    def scroll_to_bottom(self, max_iterations=50):
+        """페이지 하단까지 스크롤 (전체 콘텐츠 로드용, 최대 반복 횟수 제한)"""
         try:
             current_position = 0
-            while True:
+            for _ in range(max_iterations):
                 scroll_step = random.randint(205, 350)
                 current_position += scroll_step
                 self.driver.execute_script(f"window.scrollTo(0, {current_position});")
