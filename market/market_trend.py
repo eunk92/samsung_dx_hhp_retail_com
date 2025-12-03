@@ -129,55 +129,6 @@ def extract_number(text):
     return None
 
 
-def is_today_article(time_text):
-    """
-    기사 게시 시간이 당일인지 확인
-
-    Args:
-        time_text: 기사 옆에 표시된 시간 텍스트 (예: "14h", "2h", "30m", "1d", "3d")
-
-    Returns:
-        bool: 당일 기사이면 True, 아니면 False
-
-    Examples:
-        - "14h" -> True (14시간 전 = 당일)
-        - "2h" -> True (2시간 전 = 당일)
-        - "30m" -> True (30분 전 = 당일)
-        - "1d" -> False (1일 전 = 어제)
-        - "3d" -> False (3일 전)
-        - "1w" -> False (1주 전)
-    """
-    if not time_text:
-        return False
-
-    time_text = time_text.strip().lower()
-
-    # 분(m) 또는 시간(h) 단위는 당일
-    if re.match(r'^\d+\s*m$', time_text):  # 예: "30m", "5 m"
-        return True
-    if re.match(r'^\d+\s*h$', time_text):  # 예: "14h", "2 h"
-        return True
-
-    # 일(d), 주(w), 월(mo) 단위는 당일 아님
-    if re.match(r'^\d+\s*d$', time_text):  # 예: "1d", "3d"
-        return False
-    if re.match(r'^\d+\s*w$', time_text):  # 예: "1w"
-        return False
-    if re.match(r'^\d+\s*mo$', time_text):  # 예: "1mo"
-        return False
-
-    # "yesterday", "days ago" 등의 텍스트
-    if 'yesterday' in time_text or 'day' in time_text or 'week' in time_text or 'month' in time_text:
-        return False
-
-    # "hour", "minute", "just now" 등은 당일
-    if 'hour' in time_text or 'minute' in time_text or 'just now' in time_text:
-        return True
-
-    # 알 수 없는 형식은 False 반환 (안전하게 제외)
-    return False
-
-
 def get_input_with_timeout(prompt, timeout=10):
     """
     타임아웃이 있는 입력 받기 (Windows용)
@@ -277,29 +228,29 @@ class DatabaseManager:
         """롤백"""
         self.conn.rollback()
 
-    def get_keywords(self, category1=None, category2=None, limit=None):
+    def get_keywords(self, product_line=None, content_type=None, limit=None):
         """
-        키워드 목록 조회 (category1, category2 포함)
+        키워드 목록 조회 (product_line, content_type 포함)
 
         Args:
-            category1: 카테고리1 필터 (None이면 전체)
-            category2: 카테고리2 필터 (None이면 전체)
+            product_line: 제품 라인 필터 (None이면 전체) - TV, HHP
+            content_type: 콘텐츠 유형 필터 (None이면 전체) - News, Event
             limit: 조회 개수 제한 (None이면 전체)
         """
         query = """
-            SELECT keyword, search_url, category1, category2
+            SELECT keyword, search_url, product_line, content_type
             FROM market_mst
-            WHERE is_active = true
+            WHERE is_active = true AND analysis_type = 'trend'
         """
         params = []
 
-        if category1:
-            query += " AND category1 = %s"
-            params.append(category1)
+        if product_line:
+            query += " AND product_line = %s"
+            params.append(product_line)
 
-        if category2:
-            query += " AND category2 = %s"
-            params.append(category2)
+        if content_type:
+            query += " AND content_type = %s"
+            params.append(content_type)
 
         query += " ORDER BY id"
 
@@ -519,10 +470,10 @@ class BrowserManager:
 class BingNewsCrawler:
     """Bing News 검색 기사 수 크롤러"""
 
-    def __init__(self, headless=False, test_mode=False, test_category1=None, test_category2=None, test_count=None):
+    def __init__(self, headless=False, test_mode=False, test_product_line=None, test_content_type=None, test_count=None):
         self.test_mode = test_mode
-        self.test_category1 = test_category1
-        self.test_category2 = test_category2
+        self.test_product_line = test_product_line
+        self.test_content_type = test_content_type
         self.test_count = test_count
         self.db = DatabaseManager(test_mode=test_mode)
         self.browser = BrowserManager(headless=headless)
@@ -565,17 +516,16 @@ class BingNewsCrawler:
 
     def count_articles(self, tree):
         """
-        기사 컨테이너 수 카운트 (당일 기사만)
+        기사 컨테이너 수 카운트 (페이지의 모든 기사)
 
         Args:
             tree: lxml HTML tree
 
         Returns:
-            int: 당일 기사 수
+            int: 기사 수
         """
         try:
             container_xpath = self.xpaths.get('news_card_container')
-            time_xpath = self.xpaths.get('article_time')  # 기사 시간 XPath
 
             if not container_xpath:
                 print_log("ERROR", "news_card_container XPath가 없습니다.")
@@ -584,61 +534,12 @@ class BingNewsCrawler:
             news_cards = tree.xpath(container_xpath)
             total_count = len(news_cards)
 
-            # news_card_time XPath가 없으면 전체 카운트 반환 (기존 방식)
-            if not time_xpath:
-                print_log("WARNING", "news_card_time XPath가 없어 전체 기사 수를 반환합니다.")
-                print_log("INFO", f"  -> 기사 수: {total_count}개 (전체)")
-                return total_count
-
-            # 당일 기사만 필터링
-            today_count = self.count_today_articles(news_cards, time_xpath)
-
-            print_log("INFO", f"  -> 기사 수: {today_count}개 (당일) / {total_count}개 (전체)")
-            return today_count
+            print_log("INFO", f"  -> 기사 수: {total_count}개")
+            return total_count
 
         except Exception as e:
             print_log("WARNING", f"기사 카운트 실패: {e}")
             return 0
-
-    def count_today_articles(self, news_cards, time_xpath):
-        """
-        당일 기사만 카운트
-
-        Args:
-            news_cards: 기사 카드 요소 리스트
-            time_xpath: 기사 시간 XPath (상대 경로)
-
-        Returns:
-            int: 당일 기사 수
-        """
-        today_count = 0
-
-        for card in news_cards:
-            try:
-                # 각 카드 내에서 시간 요소 찾기 (상대 XPath 사용)
-                # time_xpath가 절대 경로면 상대 경로로 변환
-                relative_xpath = time_xpath
-                if time_xpath.startswith('//'):
-                    relative_xpath = '.' + time_xpath[1:]  # //div -> .//div
-                elif time_xpath.startswith('/'):
-                    relative_xpath = '.' + time_xpath
-
-                time_elements = card.xpath(relative_xpath)
-
-                if time_elements:
-                    time_text = time_elements[0].text_content().strip() if hasattr(time_elements[0], 'text_content') else str(time_elements[0]).strip()
-
-                    if is_today_article(time_text):
-                        today_count += 1
-                else:
-                    # 시간 요소를 찾지 못하면 포함 (안전하게)
-                    today_count += 1
-
-            except Exception:
-                # 개별 카드 처리 실패 시 포함 (안전하게)
-                today_count += 1
-
-        return today_count
 
     def crawl_keyword(self, keyword, search_url):
         """단일 키워드 크롤링"""
@@ -750,15 +651,15 @@ class BingNewsCrawler:
             # 테스트 모드: 필터 적용, 운영 모드: 전체 조회
             if self.test_mode:
                 keywords = self.db.get_keywords(
-                    category1=self.test_category1,
-                    category2=self.test_category2,
+                    product_line=self.test_product_line,
+                    content_type=self.test_content_type,
                     limit=self.test_count
                 )
                 filter_info = []
-                if self.test_category1:
-                    filter_info.append(f"category1={self.test_category1}")
-                if self.test_category2:
-                    filter_info.append(f"category2={self.test_category2}")
+                if self.test_product_line:
+                    filter_info.append(f"product_line={self.test_product_line}")
+                if self.test_content_type:
+                    filter_info.append(f"content_type={self.test_content_type}")
                 if self.test_count:
                     filter_info.append(f"limit={self.test_count}")
                 if filter_info:
@@ -808,16 +709,16 @@ if __name__ == "__main__":
 
         # 테스트 모드 필터 입력
         print("\n[테스트 필터 설정] (엔터: 전체)")
-        test_category1 = input("  category1(TV/HHP): ").strip() or None
-        test_category2 = input("  category2(News/Event): ").strip() or None
+        test_product_line = input("  product_line(TV/HHP): ").strip() or None
+        test_content_type = input("  content_type(News/Event): ").strip() or None
         test_count_input = input("  test_count: ").strip()
         test_count = int(test_count_input) if test_count_input else None
 
         crawler = BingNewsCrawler(
             headless=False,
             test_mode=test_mode,
-            test_category1=test_category1,
-            test_category2=test_category2,
+            test_product_line=test_product_line,
+            test_content_type=test_content_type,
             test_count=test_count
         )
     else:

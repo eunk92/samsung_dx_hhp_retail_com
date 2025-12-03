@@ -11,3 +11,6 @@ webdriver-manager>=4.0.0
 
 # Utilities
 pytz>=2023.3
+
+# AI / LLM
+openai>=1.0.0
