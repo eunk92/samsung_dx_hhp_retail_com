@@ -77,6 +77,58 @@ def setup_driver():
     return driver
 
 
+def set_amazon_zip_code(driver, zip_code='10001'):
+    """
+    Amazon 배송 지역 ZIP 코드 설정 (뉴욕: 10001)
+
+    Args:
+        driver: WebDriver 인스턴스
+        zip_code (str): ZIP 코드 (기본: 10001 - 맨해튼)
+
+    Returns:
+        bool: 설정 성공 시 True, 실패 시 False
+    """
+    try:
+        print(f"[INFO] Setting Amazon ZIP code to {zip_code}...")
+
+        # "Deliver to" 버튼 클릭
+        deliver_to_btn = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, 'nav-global-location-popover-link'))
+        )
+        deliver_to_btn.click()
+        time.sleep(2)
+
+        # ZIP 코드 입력 필드 찾기
+        zip_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, 'GLUXZipUpdateInput'))
+        )
+        zip_input.clear()
+        zip_input.send_keys(zip_code)
+        time.sleep(1)
+
+        # Apply 버튼 클릭
+        apply_btn = driver.find_element(By.CSS_SELECTOR, '#GLUXZipUpdate input[type="submit"], #GLUXZipUpdate .a-button-input')
+        apply_btn.click()
+        time.sleep(3)
+
+        # 팝업 닫기 (있는 경우)
+        try:
+            close_btn = WebDriverWait(driver, 3).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, '.a-popover-footer button, #GLUXConfirmClose'))
+            )
+            close_btn.click()
+            time.sleep(1)
+        except:
+            pass  # 팝업이 없을 수 있음
+
+        print(f"[OK] Amazon ZIP code set to {zip_code} (New York)")
+        return True
+
+    except Exception as e:
+        print(f"[WARNING] Failed to set Amazon ZIP code: {e}")
+        return False
+
+
 def save_cookies(driver, filepath):
     """쿠키 저장"""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -274,6 +326,11 @@ def login_to_amazon(driver, email, password):
 
             if "hello" in account_text and "sign in" not in account_text:
                 print("\n[OK] LOGIN SUCCESSFUL!")
+
+                # [9] 뉴욕 ZIP 코드 설정
+                print("[9] Setting ZIP code to New York...")
+                set_amazon_zip_code(driver, '10001')
+
                 return True
             else:
                 print("\n[FAIL] LOGIN FAILED")
@@ -309,6 +366,9 @@ def test_login_with_cookies():
 
                 if "hello" in account_text and "sign in" not in account_text:
                     print("[OK] Cookie login successful!")
+                    # ZIP 코드 설정 확인
+                    print("[INFO] Setting ZIP code to New York...")
+                    set_amazon_zip_code(driver, '10001')
                     return driver
                 else:
                     print("[WARNING] Cookies expired, need fresh login")

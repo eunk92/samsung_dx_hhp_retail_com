@@ -423,6 +423,74 @@ class BaseCrawler:
 
         print("[SUCCESS] WebDriver setup complete (stealth mode)")
 
+        # Amazon인 경우 뉴욕 ZIP 코드 자동 설정
+        if account_name == 'Amazon':
+            self.set_amazon_zip_code('10001')
+
+    def set_amazon_zip_code(self, zip_code='10001'):
+        """
+        Amazon 배송 지역 ZIP 코드 설정 (뉴욕: 10001)
+
+        쓰임새:
+        - 크롤러 시작 시 배송 지역을 뉴욕으로 고정
+        - 일관된 가격/재고 정보 수집을 위해 필요
+
+        Args:
+            zip_code (str): ZIP 코드 (기본: 10001 - 맨해튼)
+
+        Returns:
+            bool: 설정 성공 시 True, 실패 시 False
+        """
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        import random
+
+        try:
+            print(f"[INFO] Setting Amazon ZIP code to {zip_code}...")
+
+            # Amazon 메인 페이지 접속
+            self.driver.get('https://www.amazon.com')
+            time.sleep(random.uniform(3, 5))
+
+            # "Deliver to" 버튼 클릭
+            deliver_to_btn = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.ID, 'nav-global-location-popover-link'))
+            )
+            deliver_to_btn.click()
+            time.sleep(random.uniform(1, 2))
+
+            # ZIP 코드 입력 필드 찾기
+            zip_input = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.ID, 'GLUXZipUpdateInput'))
+            )
+            zip_input.clear()
+            zip_input.send_keys(zip_code)
+            time.sleep(random.uniform(0.5, 1))
+
+            # Apply 버튼 클릭
+            apply_btn = self.driver.find_element(By.CSS_SELECTOR, '#GLUXZipUpdate input[type="submit"], #GLUXZipUpdate .a-button-input')
+            apply_btn.click()
+            time.sleep(random.uniform(2, 3))
+
+            # 팝업 닫기 (있는 경우)
+            try:
+                close_btn = WebDriverWait(self.driver, 3).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, '.a-popover-footer button, #GLUXConfirmClose'))
+                )
+                close_btn.click()
+                time.sleep(1)
+            except:
+                pass  # 팝업이 없을 수 있음
+
+            print(f"[SUCCESS] Amazon ZIP code set to {zip_code} (New York)")
+            return True
+
+        except Exception as e:
+            print(f"[WARNING] Failed to set Amazon ZIP code: {e}")
+            print(f"[INFO] Continuing without ZIP code setting...")
+            return False
+
     def extract_text_safe(self, element, xpath):
         """
         XPath를 사용하여 안전하게 텍스트 추출
