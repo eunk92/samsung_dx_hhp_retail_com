@@ -42,7 +42,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 
 from common.base_crawler import BaseCrawler
-from common import data_extractor
+from common.data_extractor import extract_numeric_value
 
 
 class WalmartDetailCrawler(BaseCrawler):
@@ -127,6 +127,27 @@ class WalmartDetailCrawler(BaseCrawler):
         except Exception as e:
             print(f"[WARNING] CAPTCHA handling error: {e}")
             return True
+
+    def extract_ratings_count(self, tree):
+        """Walmart 별점 개수 추출 (예: '1,234 ratings' → '1234')"""
+        text = self.safe_extract(tree, 'count_of_star_ratings')
+        result = extract_numeric_value(text, include_comma=True, include_decimal=False)
+        if result:
+            return result.replace(',', '')
+        return None
+
+    def extract_review_count(self, tree):
+        """Walmart 리뷰 개수 추출 (예: '3,572 reviews' → '3572')"""
+        text = self.safe_extract(tree, 'count_of_reviews')
+        result = extract_numeric_value(text, include_comma=True, include_decimal=False)
+        if result:
+            return result.replace(',', '')
+        return None
+
+    def extract_star_rating(self, tree):
+        """Walmart 별점 추출 (예: '4.5 out of 5 stars' → '4.5')"""
+        text = self.safe_extract(tree, 'star_rating')
+        return extract_numeric_value(text, include_comma=False, include_decimal=True)
 
     def initialize_session(self):
         """세션 초기화: example.com → walmart.com → 검색 → 카테고리 순차 접근 (TV 크롤러와 동일)"""
@@ -590,17 +611,9 @@ class WalmartDetailCrawler(BaseCrawler):
                     page_html = self.driver.page_source
                     tree = html.fromstring(page_html)
 
-                    count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
-                    count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
-
-                    star_rating_raw = self.safe_extract(tree, 'star_rating')
-                    star_rating = data_extractor.extract_rating(star_rating_raw)
-
-                    count_of_star_ratings = data_extractor.extract_star_ratings_count(
-                        tree, count_of_reviews,
-                        self.xpaths.get('count_of_star_ratings', {}).get('xpath'),
-                        self.account_name
-                    )
+                    count_of_reviews = self.extract_review_count(tree)
+                    star_rating = self.extract_star_rating(tree)
+                    count_of_star_ratings = self.extract_ratings_count(tree)
 
                     # 3개 필드 모두 추출 성공 시 종료
                     if count_of_reviews is not None and star_rating is not None and count_of_star_ratings is not None:
