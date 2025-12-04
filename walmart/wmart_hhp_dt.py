@@ -102,8 +102,8 @@ class WalmartDetailCrawler(BaseCrawler):
         except Exception:
             pass  # 마우스 움직임 실패 시 무시
 
-    def handle_captcha(self, max_attempts=3):
-        """CAPTCHA 감지 및 수동 처리"""
+    def handle_captcha(self, max_attempts=3, wait_seconds=60):
+        """CAPTCHA 감지 및 자동 대기 처리 (TV 크롤러 방식)"""
         try:
             time.sleep(2)
 
@@ -119,14 +119,131 @@ class WalmartDetailCrawler(BaseCrawler):
                     return True
 
                 print(f"[WARNING] CAPTCHA 감지! (시도 {attempt + 1}/{max_attempts})")
-                print("[INFO] 브라우저에서 CAPTCHA를 수동으로 해결한 후 엔터를 누르세요...")
-                input()
+
+                # 자동 대기 (input() 대신 time.sleep 사용)
+                print(f"[INFO] CAPTCHA 해결 대기 중... ({wait_seconds}초)")
+                time.sleep(wait_seconds)
+
+            # 최종 실패 시에만 스크린샷 저장
+            page_content = self.driver.page_source.lower()
+            if any(keyword in page_content for keyword in captcha_keywords):
+                try:
+                    capture_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'capture')
+                    os.makedirs(capture_dir, exist_ok=True)
+                    screenshot_path = os.path.join(capture_dir, f"captcha_failed_{int(time.time())}.png")
+                    self.driver.save_screenshot(screenshot_path)
+                    print(f"[INFO] 스크린샷 저장됨: {screenshot_path}")
+                except:
+                    pass
 
             return True
 
         except Exception as e:
             print(f"[WARNING] CAPTCHA handling error: {e}")
             return True
+
+    def handle_sorry_page(self, max_button_attempts=3, max_refresh_attempts=5):
+        """
+        Sorry 페이지 감지 및 Try Again 버튼 클릭 처리
+
+        Args:
+            max_button_attempts: Try Again 버튼 클릭 최대 시도 횟수
+            max_refresh_attempts: 버튼 실패 후 새로고침 최대 시도 횟수
+
+        Returns:
+            bool: 페이지가 정상으로 복구되면 True, 실패하면 False
+        """
+        try:
+            # Walmart Sorry 페이지 실제 문구 (정확한 매칭)
+            sorry_keywords = [
+                "we're having technical issues",
+                "we'll be back in a flash",
+                "this page isn't available right now",
+                "this page isn't available",
+                "return to home"
+            ]
+
+            # 1단계: Try Again 버튼 클릭 시도 (최대 max_button_attempts회)
+            for attempt in range(max_button_attempts):
+                page_content = self.driver.page_source.lower()
+
+                if not any(keyword in page_content for keyword in sorry_keywords):
+                    if attempt > 0:
+                        print("[OK] Sorry 페이지 해결됨 (버튼 클릭)")
+                    return True
+
+                print(f"[WARNING] Sorry 페이지 감지! (버튼 시도 {attempt + 1}/{max_button_attempts})")
+
+                # Try Again 버튼 찾기 및 클릭 시도
+                try_again_clicked = False
+                try_again_selectors = [
+                    "//button[contains(text(), 'Try again')]",
+                    "//button[contains(text(), 'try again')]",
+                    "//button[contains(text(), 'Try Again')]",
+                    "//a[contains(text(), 'Try again')]",
+                    "//a[contains(text(), 'try again')]",
+                    "//button[contains(@class, 'retry')]",
+                    "//button[contains(@class, 'try-again')]",
+                    "//*[contains(text(), 'Try again') and (self::button or self::a)]",
+                ]
+
+                for selector in try_again_selectors:
+                    try:
+                        try_again_button = self.driver.find_element(By.XPATH, selector)
+                        if try_again_button.is_displayed():
+                            print(f"[INFO] Try Again 버튼 발견: {selector}")
+                            try_again_button.click()
+                            try_again_clicked = True
+                            print("[OK] Try Again 버튼 클릭 완료")
+                            time.sleep(random.uniform(3, 5))
+                            break
+                    except:
+                        continue
+
+                # 버튼을 못 찾았으면 이 단계에서 새로고침 1회 시도
+                if not try_again_clicked:
+                    print("[INFO] Try Again 버튼을 찾지 못함, 새로고침 시도...")
+                    self.driver.refresh()
+                    time.sleep(random.uniform(5, 8))
+
+            # 2단계: 버튼 클릭으로 해결 안 되면 새로고침 추가 시도 (최대 max_refresh_attempts회)
+            page_content = self.driver.page_source.lower()
+            if any(keyword in page_content for keyword in sorry_keywords):
+                print(f"[WARNING] 버튼 클릭 실패, 새로고침 시도 시작 (최대 {max_refresh_attempts}회)...")
+
+                for refresh_attempt in range(max_refresh_attempts):
+                    print(f"[INFO] 새로고침 시도 {refresh_attempt + 1}/{max_refresh_attempts}...")
+                    self.driver.refresh()
+                    time.sleep(random.uniform(5, 8))
+
+                    page_content = self.driver.page_source.lower()
+                    if not any(keyword in page_content for keyword in sorry_keywords):
+                        print(f"[OK] Sorry 페이지 해결됨 (새로고침 {refresh_attempt + 1}회)")
+                        return True
+
+            # 최종 확인
+            page_content = self.driver.page_source.lower()
+            if any(keyword in page_content for keyword in sorry_keywords):
+                print(f"[ERROR] Sorry 페이지 해결 실패 (버튼 {max_button_attempts}회 + 새로고침 {max_refresh_attempts}회 시도 후)")
+
+                # 최종 실패 시에만 스크린샷 저장
+                try:
+                    capture_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'capture')
+                    os.makedirs(capture_dir, exist_ok=True)
+                    screenshot_path = os.path.join(capture_dir, f"sorry_page_failed_{int(time.time())}.png")
+                    self.driver.save_screenshot(screenshot_path)
+                    print(f"[INFO] 스크린샷 저장됨: {screenshot_path}")
+                except:
+                    pass
+
+                return False
+
+            return True
+
+        except Exception as e:
+            print(f"[WARNING] Sorry page handling error: {e}")
+            traceback.print_exc()
+            return True  # 에러 발생해도 계속 진행
 
     def extract_rating_from_header(self, tree):
         """상단 reviews-and-ratings 영역에서 별점과 별점 수 추출
@@ -182,23 +299,20 @@ class WalmartDetailCrawler(BaseCrawler):
         return extract_numeric_value(text, include_comma=False, include_decimal=True)
 
     def initialize_session(self):
-        """세션 초기화: example.com → walmart.com → 검색 → 카테고리 순차 접근 (TV 크롤러와 동일)"""
+        """세션 초기화: walmart.com 방문 (example.com 경유 제거)"""
         try:
             print("[INFO] 세션 초기화 중...")
 
-            # 1단계: 중립 사이트 방문 (브라우저 fingerprint 생성)
-            print("[INFO] Step 1/4: 중립 사이트 방문...")
-            self.driver.get('https://www.example.com')
-            time.sleep(random.uniform(2, 4))
-            self.add_random_mouse_movements()
-
-            # 2단계: Walmart 메인 페이지 방문 (쿠키/세션 생성)
-            print("[INFO] Step 2/4: Walmart 메인 페이지 방문...")
+            # 1단계: Walmart 메인 페이지 방문 (쿠키/세션 생성)
+            print("[INFO] Step 1/2: Walmart 메인 페이지 방문...")
             self.driver.get('https://www.walmart.com')
             time.sleep(random.uniform(8, 12))
 
             # CAPTCHA 체크
             self.handle_captcha()
+
+            # Sorry 페이지 체크
+            self.handle_sorry_page()
 
             # 마우스 움직임 및 스크롤
             self.add_random_mouse_movements()
@@ -211,63 +325,6 @@ class WalmartDetailCrawler(BaseCrawler):
             # 위로 스크롤
             self.driver.execute_script("window.scrollTo(0, 0)")
             time.sleep(random.uniform(2, 3))
-
-            # 3단계: 검색창에서 검색 시도 (TV 크롤러와 동일)
-            print("[INFO] Step 3/4: 검색창에서 'phone' 검색 시도...")
-            try:
-                from selenium.webdriver.common.keys import Keys
-
-                search_selectors = [
-                    "input[type='search']",
-                    "input[aria-label*='Search']",
-                    "input[placeholder*='Search']",
-                    "input[name='q']"
-                ]
-
-                search_box = None
-                for selector in search_selectors:
-                    try:
-                        search_box = self.wait.until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                        )
-                        if search_box:
-                            print(f"[OK] 검색창 발견: {selector}")
-                            break
-                    except:
-                        continue
-
-                if search_box:
-                    # 검색창 클릭
-                    search_box.click()
-                    time.sleep(random.uniform(2, 3))
-
-                    # "phone" 타이핑 (사람처럼 천천히)
-                    for char in "cellphone":
-                        search_box.send_keys(char)
-                        time.sleep(random.uniform(0.1, 0.3))
-
-                    time.sleep(random.uniform(3, 5))
-
-                    # 검색 실행 (엔터)
-                    search_box.send_keys(Keys.ENTER)
-
-                    # 검색 결과 대기
-                    time.sleep(random.uniform(8, 12))
-
-                    # CAPTCHA 체크
-                    self.handle_captcha()
-
-                    # 자연스러운 스크롤
-                    for _ in range(2):
-                        self.driver.execute_script(f"window.scrollBy(0, {random.randint(200, 400)})")
-                        time.sleep(random.uniform(1, 2))
-
-                    print("[OK] 검색 완료")
-                else:
-                    print("[WARNING] 검색창을 찾지 못함, 검색 단계 건너뜀")
-
-            except Exception as e:
-                print(f"[WARNING] 검색 실패 (계속 진행): {e}")
 
             print("[OK] 세션 초기화 완료")
             return True
@@ -367,7 +424,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
         # 5. batch_id 설정
         if not self.batch_id:
-            self.batch_id = 'w_20251201_101640'
+            self.batch_id = 'w_20251204_015010'
 
         print(f"[INFO] Initialize completed: batch_id={self.batch_id}")
         return True
@@ -444,6 +501,10 @@ class WalmartDetailCrawler(BaseCrawler):
                 if not self.handle_captcha():
                     print("[WARNING] CAPTCHA handling failed")
                 time.sleep(random.uniform(1, 2))
+
+            # Sorry 페이지 체크 (상세 페이지 접근 시)
+            if not self.handle_sorry_page():
+                print("[WARNING] 상세 페이지 Sorry 감지 - 기본 정보로 진행")
 
             # 전체 콘텐츠 로드: 하단까지 스크롤 → 배너 닫기 → 맨 위로 복귀
             self.scroll_to_bottom()
@@ -724,66 +785,81 @@ class WalmartDetailCrawler(BaseCrawler):
 
                 if review_button_found:
                     try:
-                        detailed_review_xpath = self.xpaths.get('detailed_review_content', {}).get('xpath')
-                        if detailed_review_xpath:
-                            try:
-                                self.wait.until(EC.visibility_of_element_located((By.XPATH, detailed_review_xpath)))
-                                time.sleep(random.uniform(1, 3))
-                            except Exception:
-                                time.sleep(random.uniform(3, 7))
-
-                            all_reviews = []
-                            current_page = 1
-                            max_reviews = 20
-
-                            while len(all_reviews) < max_reviews:
-                                if current_page > 1:
-                                    time.sleep(random.uniform(1, 3))
-
-                                page_html = self.driver.page_source
-                                tree = html.fromstring(page_html)
-
-                                reviews_list = tree.xpath(detailed_review_xpath)
-
-                                if reviews_list:
-                                    for review in reviews_list:
-                                        if len(all_reviews) >= max_reviews:
-                                            break
-
-                                        if hasattr(review, 'text_content'):
-                                            review_text = review.text_content()
-                                        else:
-                                            review_text = review
-
-                                        cleaned_review = ' '.join(review_text.split())
-                                        all_reviews.append(cleaned_review)
-
-                                if len(all_reviews) >= max_reviews:
-                                    break
-
+                        # 리뷰 상세 페이지 이동 후 Sorry 페이지 체크
+                        if not self.handle_sorry_page():
+                            print("[WARNING] 리뷰 페이지 Sorry 감지 - 리뷰 수집 중단")
+                        else:
+                            detailed_review_xpath = self.xpaths.get('detailed_review_content', {}).get('xpath')
+                            if detailed_review_xpath:
                                 try:
-                                    next_page_num = current_page + 1
-                                    review_pagination_template = self.xpaths.get('review_pagination', {}).get('xpath', '')
-                                    if not review_pagination_template:
-                                        break
-                                    next_page_xpath = review_pagination_template.replace('{page_num}', str(next_page_num))
-                                    next_page_button = self.driver.find_element(By.XPATH, next_page_xpath)
-
-                                    if next_page_button.is_displayed():
-                                        self.driver.execute_script("arguments[0].scrollIntoView(true);", next_page_button)
-                                        time.sleep(random.uniform(0.5, 1.5))
-                                        next_page_button.click()
-                                        time.sleep(random.uniform(2, 4))
-                                        current_page = next_page_num
-                                    else:
-                                        break
+                                    self.wait.until(EC.visibility_of_element_located((By.XPATH, detailed_review_xpath)))
+                                    time.sleep(random.uniform(1, 3))
                                 except Exception:
-                                    break
+                                    time.sleep(random.uniform(3, 7))
 
-                            if all_reviews:
-                                formatted_reviews = [f"review{idx} - {review}" for idx, review in enumerate(all_reviews, 1)]
-                                detailed_review_content = ' ||| '.join(formatted_reviews)
-                                print(f"[INFO] Reviews: {len(all_reviews)}")
+                                all_reviews = []
+                                current_page = 1
+                                max_reviews = 20
+
+                                while len(all_reviews) < max_reviews:
+                                    if current_page > 1:
+                                        time.sleep(random.uniform(1, 3))
+
+                                    # 페이지 이동 후 Sorry 페이지 체크
+                                    if not self.handle_sorry_page():
+                                        print(f"[WARNING] 리뷰 페이지 {current_page} Sorry 감지 - 리뷰 수집 중단")
+                                        break
+
+                                    page_html = self.driver.page_source
+                                    tree = html.fromstring(page_html)
+
+                                    reviews_list = tree.xpath(detailed_review_xpath)
+
+                                    if reviews_list:
+                                        for review in reviews_list:
+                                            if len(all_reviews) >= max_reviews:
+                                                break
+
+                                            if hasattr(review, 'text_content'):
+                                                review_text = review.text_content()
+                                            else:
+                                                review_text = review
+
+                                            cleaned_review = ' '.join(review_text.split())
+                                            all_reviews.append(cleaned_review)
+
+                                    if len(all_reviews) >= max_reviews:
+                                        break
+
+                                    try:
+                                        next_page_num = current_page + 1
+                                        review_pagination_template = self.xpaths.get('review_pagination', {}).get('xpath', '')
+                                        if not review_pagination_template:
+                                            break
+                                        next_page_xpath = review_pagination_template.replace('{page_num}', str(next_page_num))
+                                        next_page_button = self.driver.find_element(By.XPATH, next_page_xpath)
+
+                                        if next_page_button.is_displayed():
+                                            self.driver.execute_script("arguments[0].scrollIntoView(true);", next_page_button)
+                                            time.sleep(random.uniform(0.5, 1.5))
+                                            next_page_button.click()
+                                            time.sleep(random.uniform(2, 4))
+
+                                            # 다음 페이지 클릭 후 Sorry 페이지 체크
+                                            if not self.handle_sorry_page():
+                                                print(f"[WARNING] 리뷰 페이지 {next_page_num} 이동 중 Sorry 감지 - 수집된 리뷰로 진행")
+                                                break
+
+                                            current_page = next_page_num
+                                        else:
+                                            break
+                                    except Exception:
+                                        break
+
+                                if all_reviews:
+                                    formatted_reviews = [f"review{idx} - {review}" for idx, review in enumerate(all_reviews, 1)]
+                                    detailed_review_content = ' ||| '.join(formatted_reviews)
+                                    print(f"[INFO] Reviews: {len(all_reviews)}")
                     except Exception as e:
                         print(f"[WARNING] Failed to extract reviews: {e}")
 

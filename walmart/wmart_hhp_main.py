@@ -47,11 +47,18 @@ from common.base_crawler import BaseCrawler
 
 class WalmartMainCrawler(BaseCrawler):
     """
-    Walmart Main 페이지 크롤러 (Playwright 기반)
+    Walmart Main 페이지 크롤러 (undetected-chromedriver 기반)
     """
 
-    def __init__(self, test_mode=True, batch_id=None):
-        """초기화. test_mode: 테스트(True)/운영 모드(False), batch_id: 통합 크롤러에서 전달"""
+    def __init__(self, test_mode=True, batch_id=None, stealth_mode='full'):
+        """
+        초기화.
+
+        Args:
+            test_mode: 테스트(True)/운영 모드(False)
+            batch_id: 통합 크롤러에서 전달
+            stealth_mode: 'simple' (기본, TV 크롤러 수준) 또는 'full' (강화된 PerimeterX 대응)
+        """
         super().__init__()
         self.test_mode = test_mode
         self.account_name = 'Walmart'
@@ -60,6 +67,7 @@ class WalmartMainCrawler(BaseCrawler):
         self.standalone = batch_id is None  # 개별 실행 여부
         self.calendar_week = None
         self.url_template = None
+        self.stealth_mode = stealth_mode  # 스텔스 모드: 'simple' 또는 'full'
 
         # Selenium/undetected-chromedriver 객체
         self.driver = None
@@ -114,9 +122,9 @@ class WalmartMainCrawler(BaseCrawler):
             return None
 
     def setup_browser(self):
-        """undetected-chromedriver 브라우저 설정 (TV 크롤러와 동일)"""
+        """undetected-chromedriver 브라우저 설정"""
         try:
-            print("[INFO] undetected-chromedriver 설정 중 (TV 크롤러와 동일한 방식)...")
+            print(f"[INFO] undetected-chromedriver 설정 중 (stealth_mode={self.stealth_mode})...")
 
             options = uc.ChromeOptions()
             options.add_argument('--disable-blink-features=AutomationControlled')
@@ -129,6 +137,11 @@ class WalmartMainCrawler(BaseCrawler):
 
             self.driver = uc.Chrome(options=options, use_subprocess=True)
             self.wait = WebDriverWait(self.driver, 20)
+
+            # 스텔스 스크립트 주입
+            stealth_script = self.get_stealth_script(mode=self.stealth_mode)
+            self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {'source': stealth_script})
+            print(f"[OK] 스텔스 스크립트 주입 완료 (mode={self.stealth_mode})")
 
             print("[OK] undetected-chromedriver 설정 완료")
             return True
@@ -172,8 +185,70 @@ class WalmartMainCrawler(BaseCrawler):
             traceback.print_exc()
             return False
 
-    def get_stealth_script(self):
-        """봇 탐지 우회를 위한 강화된 스텔스 스크립트 (PerimeterX 대응)"""
+    def get_stealth_script(self, mode='simple'):
+        """
+        봇 탐지 우회를 위한 스텔스 스크립트
+
+        Args:
+            mode: 'simple' (기본, TV 크롤러 수준) 또는 'full' (강화된 PerimeterX 대응)
+        """
+        if mode == 'simple':
+            return self._get_simple_stealth_script()
+        else:
+            return self._get_full_stealth_script()
+
+    def _get_simple_stealth_script(self):
+        """단순화된 스텔스 스크립트 (TV 크롤러 수준) - 기본값"""
+        return """
+            // ==================== navigator.webdriver 제거 ====================
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            delete navigator.__proto__.webdriver;
+
+            // ==================== Chrome 객체 기본 설정 ====================
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
+            };
+
+            // ==================== Plugins 기본 설정 ====================
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [
+                    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                    { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' }
+                ]
+            });
+
+            // ==================== Languages ====================
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+
+            // ==================== Permissions ====================
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+
+            // ==================== 화면 정보 ====================
+            Object.defineProperty(screen, 'width', { get: () => 1920 });
+            Object.defineProperty(screen, 'height', { get: () => 1080 });
+
+            // ==================== 하드웨어 정보 ====================
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+            console.log('[Stealth-Simple] Anti-detection script loaded');
+        """
+
+    def _get_full_stealth_script(self):
+        """강화된 스텔스 스크립트 (PerimeterX 대응)"""
         return """
             // ==================== 1. navigator.webdriver 완전 제거 ====================
             // 프로토타입 체인까지 완전히 숨기기
@@ -427,8 +502,8 @@ class WalmartMainCrawler(BaseCrawler):
         except Exception:
             pass  # 마우스 움직임 실패 시 무시
 
-    def handle_captcha(self, max_attempts=3, auto_try=False):
-        """CAPTCHA 감지 및 수동 처리"""
+    def handle_captcha(self, max_attempts=3, wait_seconds=60):
+        """CAPTCHA 감지 및 자동 대기 처리 (TV 크롤러 방식)"""
         try:
             time.sleep(2)
 
@@ -444,8 +519,22 @@ class WalmartMainCrawler(BaseCrawler):
                     return True
 
                 print(f"[WARNING] CAPTCHA 감지! (시도 {attempt + 1}/{max_attempts})")
-                print("[INFO] 브라우저에서 CAPTCHA를 수동으로 해결한 후 엔터를 누르세요...")
-                input()
+
+                # 자동 대기 (input() 대신 time.sleep 사용)
+                print(f"[INFO] CAPTCHA 해결 대기 중... ({wait_seconds}초)")
+                time.sleep(wait_seconds)
+
+            # 최종 실패 시에만 스크린샷 저장
+            page_content = self.driver.page_source.lower()
+            if any(keyword in page_content for keyword in captcha_keywords):
+                try:
+                    capture_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'capture')
+                    os.makedirs(capture_dir, exist_ok=True)
+                    screenshot_path = os.path.join(capture_dir, f"captcha_failed_{int(time.time())}.png")
+                    self.driver.save_screenshot(screenshot_path)
+                    print(f"[INFO] 스크린샷 저장됨: {screenshot_path}")
+                except:
+                    pass
 
             return True
 
@@ -454,18 +543,12 @@ class WalmartMainCrawler(BaseCrawler):
             return True
 
     def initialize_session(self):
-        """세션 초기화: example.com → walmart.com → 검색 → 카테고리 순차 접근 (TV 크롤러와 동일)"""
+        """세션 초기화: walmart.com → 검색 (example.com 경유 제거)"""
         try:
             print("[INFO] 세션 초기화 중...")
 
-            # 1단계: 중립 사이트 방문 (브라우저 fingerprint 생성)
-            print("[INFO] Step 1/4: 중립 사이트 방문...")
-            self.driver.get('https://www.example.com')
-            time.sleep(random.uniform(2, 4))
-            self.add_random_mouse_movements()
-
-            # 2단계: Walmart 메인 페이지 방문 (쿠키/세션 생성)
-            print("[INFO] Step 2/4: Walmart 메인 페이지 방문...")
+            # 1단계: Walmart 메인 페이지 방문 (쿠키/세션 생성)
+            print("[INFO] Step 1/3: Walmart 메인 페이지 방문...")
             self.driver.get('https://www.walmart.com')
             time.sleep(random.uniform(8, 12))
 
@@ -484,8 +567,8 @@ class WalmartMainCrawler(BaseCrawler):
             self.driver.execute_script("window.scrollTo(0, 0)")
             time.sleep(random.uniform(2, 3))
 
-            # 3단계: 검색창에서 검색 시도 (TV 크롤러와 동일)
-            print("[INFO] Step 3/4: 검색창에서 'phone' 검색 시도...")
+            # 2단계: 검색창에서 검색 시도
+            print("[INFO] Step 2/3: 검색창에서 'cellphone' 검색 시도...")
             try:
                 from selenium.webdriver.common.keys import Keys
 
@@ -513,7 +596,7 @@ class WalmartMainCrawler(BaseCrawler):
                     search_box.click()
                     time.sleep(random.uniform(2, 3))
 
-                    # "phone" 타이핑 (사람처럼 천천히)
+                    # "cellphone" 타이핑 (사람처럼 천천히)
                     for char in "cellphone":
                         search_box.send_keys(char)
                         time.sleep(random.uniform(0.1, 0.3))
@@ -921,8 +1004,21 @@ class WalmartMainCrawler(BaseCrawler):
 
 
 def main():
-    """개별 실행 진입점 (테스트 모드)"""
-    crawler = WalmartMainCrawler(test_mode=True)
+    """
+    개별 실행 진입점 (테스트 모드)
+
+    사용법:
+        python wmart_hhp_main.py                    # 기본 (simple 스텔스)
+        python wmart_hhp_main.py --stealth simple  # simple 스텔스 (TV 크롤러 수준)
+        python wmart_hhp_main.py --stealth full    # full 스텔스 (PerimeterX 대응)
+    """
+    import argparse
+    parser = argparse.ArgumentParser(description='Walmart HHP Main Crawler')
+    parser.add_argument('--stealth', type=str, choices=['simple', 'full'], default='full',
+                        help='스텔스 모드: simple (TV 크롤러 수준) 또는 full (기본, 강화된 PerimeterX 대응)')
+    args = parser.parse_args()
+
+    crawler = WalmartMainCrawler(test_mode=True, stealth_mode=args.stealth)
     crawler.run()
 
 
