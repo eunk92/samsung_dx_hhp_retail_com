@@ -66,6 +66,7 @@ class WalmartBSRCrawler(BaseCrawler):
 
         self.test_count = 2  # 테스트 모드
         self.max_products = 100  # 운영 모드
+        self.max_pages = 10  # 최대 페이지 수
         self.current_rank = 0
 
         # 캐시 기반 중복 관리
@@ -625,7 +626,7 @@ class WalmartBSRCrawler(BaseCrawler):
             self.current_rank = 0
             page_num = 1
 
-            while (total_insert + total_update) < target_products:
+            while (total_insert + total_update) < target_products and page_num <= self.max_pages:
                 products = self.crawl_page(page_num)
 
                 if not products:
