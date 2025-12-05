@@ -109,7 +109,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
             # Check page content for CAPTCHA keywords
             page_content = self.driver.page_source.lower()
-            if any(keyword in page_content for keyword in ['press & hold', 'press and hold', 'captcha', 'human verification']):
+            if any(keyword in page_content for keyword in ['press & hold', 'press and hold', 'human verification', 'verify you are human']):
                 print("[WARNING] CAPTCHA keywords found in page")
                 print("[INFO] CAPTCHA detection - waiting 60 seconds for manual intervention...")
                 print("[INFO] Please solve CAPTCHA manually if present")
@@ -413,7 +413,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
         # 5. batch_id 설정
         if not self.batch_id:
-            self.batch_id = 'w_20251204_015010'
+            self.batch_id = 'w_20251205_132021'
 
         print(f"[INFO] Initialize completed: batch_id={self.batch_id}")
         return True
@@ -525,8 +525,20 @@ class WalmartDetailCrawler(BaseCrawler):
                 header_star_rating, header_count_of_star_ratings = self.extract_rating_from_header(tree)
 
             # 추가 필드 추출
-            number_of_ppl_purchased_yesterday = self.safe_extract(tree, 'number_of_ppl_purchased_yesterday')
-            number_of_ppl_added_to_carts = self.safe_extract(tree, 'number_of_ppl_added_to_carts')
+            number_of_ppl_purchased_yesterday_raw = self.safe_extract(tree, 'number_of_ppl_purchased_yesterday')
+            number_of_ppl_purchased_yesterday = None
+            if number_of_ppl_purchased_yesterday_raw:
+                match = re.search(r'(\d+)', number_of_ppl_purchased_yesterday_raw)
+                if match:
+                    number_of_ppl_purchased_yesterday = match.group(1)
+
+            number_of_ppl_added_to_carts_raw = self.safe_extract(tree, 'number_of_ppl_added_to_carts')
+            number_of_ppl_added_to_carts = None
+            if number_of_ppl_added_to_carts_raw:
+                match = re.search(r'(\d+)', number_of_ppl_added_to_carts_raw)
+                if match:
+                    number_of_ppl_added_to_carts = match.group(1)
+
             sku_popularity = self.safe_extract_join(tree, 'sku_popularity', separator=", ")
             savings = self.safe_extract(tree, 'savings')
             discount_type = self.safe_extract(tree, 'discount_type')

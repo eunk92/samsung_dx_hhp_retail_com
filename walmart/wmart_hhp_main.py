@@ -65,7 +65,7 @@ class WalmartMainCrawler(BaseCrawler):
         self.driver = None
         self.wait = None
 
-        self.test_count = 1  # 테스트 모드
+        self.test_count = 5  # 테스트 모드
         self.max_products = 300  # 운영 모드
         self.current_rank = 0
         self.browser_restart_interval = 5  # N페이지마다 브라우저 재시작
@@ -82,30 +82,30 @@ class WalmartMainCrawler(BaseCrawler):
                 if not parts:
                     return None
 
-                if len(parts) >= 3:
-                    dollar_idx = None
-                    for i, p in enumerate(parts):
-                        if '$' in p:
-                            dollar_idx = i
-                            break
+                # '$'만 있는 요소의 인덱스 찾기
+                dollar_idx = None
+                for i, p in enumerate(parts):
+                    if p == '$':
+                        dollar_idx = i
+                        break
 
-                    if dollar_idx is not None and dollar_idx + 2 < len(parts):
-                        dollars = parts[dollar_idx + 1]
-                        cents = parts[dollar_idx + 2]
-                        if dollars.isdigit() and cents.isdigit():
-                            return f"${dollars}.{cents}"
+                # $ 다음 2개 요소 연결: $[idx+1].[idx+2]
+                if dollar_idx is not None and dollar_idx + 2 < len(parts):
+                    dollars = parts[dollar_idx + 1]
+                    cents = parts[dollar_idx + 2]
+                    if dollars.isdigit():
+                        return f"${dollars}.{cents}"
 
-                price_result = ''.join(parts)
+                # fallback: 이미 완성된 가격 형식 찾기 ($XX.XX)
+                for p in parts:
+                    if p.startswith('$') and '.' in p:
+                        return p
 
+            # 문자열인 경우 정규식으로 추출
             if isinstance(price_result, str):
-                if '$' in price_result and '.' in price_result:
-                    return price_result.strip()
-
-                match = re.search(r'\$(\d+)\.?(\d{2})?', price_result)
+                match = re.search(r'\$\d+\.\d+(?:/month)?', price_result)
                 if match:
-                    dollars = match.group(1)
-                    cents = match.group(2) if match.group(2) else '00'
-                    return f"${dollars}.{cents}"
+                    return match.group(0)
 
             return None
 
@@ -434,7 +434,7 @@ class WalmartMainCrawler(BaseCrawler):
 
             # Check page content for CAPTCHA keywords
             page_content = self.driver.page_source.lower()
-            if any(keyword in page_content for keyword in ['press & hold', 'press and hold', 'captcha', 'human verification']):
+            if any(keyword in page_content for keyword in ['press & hold', 'press and hold', 'human verification', 'verify you are human']):
                 print("[WARNING] CAPTCHA keywords found in page")
                 print("[INFO] CAPTCHA detection - waiting 60 seconds for manual intervention...")
                 print("[INFO] Please solve CAPTCHA manually if present")
