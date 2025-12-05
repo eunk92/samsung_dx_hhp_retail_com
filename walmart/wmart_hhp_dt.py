@@ -102,41 +102,30 @@ class WalmartDetailCrawler(BaseCrawler):
         except Exception:
             pass  # 마우스 움직임 실패 시 무시
 
-    def handle_captcha(self, max_attempts=3, wait_seconds=60):
-        """CAPTCHA 감지 및 자동 대기 처리 (TV 크롤러 방식)"""
+    def handle_captcha(self):
+        """Handle 'PRESS & HOLD' CAPTCHA if present (TV 크롤러와 동일)"""
         try:
-            time.sleep(2)
+            print("[INFO] Checking for CAPTCHA...")
 
-            # CAPTCHA 키워드 감지
-            captcha_keywords = ['press & hold', 'press and hold', 'human verification', 'robot or human', 'verify you are human']
-
-            for attempt in range(max_attempts):
-                page_content = self.driver.page_source.lower()
-
-                if not any(keyword in page_content for keyword in captcha_keywords):
-                    if attempt > 0:
-                        print("[OK] CAPTCHA 해결됨")
-                    return True
-
-                print(f"[WARNING] CAPTCHA 감지! (시도 {attempt + 1}/{max_attempts})")
-
-                # 자동 대기 (input() 대신 time.sleep 사용)
-                print(f"[INFO] CAPTCHA 해결 대기 중... ({wait_seconds}초)")
-                time.sleep(wait_seconds)
-
-            # 최종 실패 시에만 스크린샷 저장
+            # Check page content for CAPTCHA keywords
             page_content = self.driver.page_source.lower()
-            if any(keyword in page_content for keyword in captcha_keywords):
+            if any(keyword in page_content for keyword in ['press & hold', 'press and hold', 'captcha', 'human verification']):
+                print("[WARNING] CAPTCHA keywords found in page")
+                print("[INFO] CAPTCHA detection - waiting 60 seconds for manual intervention...")
+                print("[INFO] Please solve CAPTCHA manually if present")
+
+                # Save screenshot for debugging
                 try:
-                    capture_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'capture')
-                    os.makedirs(capture_dir, exist_ok=True)
-                    screenshot_path = os.path.join(capture_dir, f"captcha_failed_{int(time.time())}.png")
-                    self.driver.save_screenshot(screenshot_path)
-                    print(f"[INFO] 스크린샷 저장됨: {screenshot_path}")
+                    self.driver.save_screenshot(f"captcha_screen_{int(time.time())}.png")
+                    print("[INFO] Screenshot saved for debugging")
                 except:
                     pass
 
-            return True
+                time.sleep(60)
+                return True
+            else:
+                print("[INFO] No CAPTCHA detected")
+                return True
 
         except Exception as e:
             print(f"[WARNING] CAPTCHA handling error: {e}")

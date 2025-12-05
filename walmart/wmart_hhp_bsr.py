@@ -153,27 +153,30 @@ class WalmartBSRCrawler(BaseCrawler):
         except Exception:
             pass  # 마우스 움직임 실패 시 무시
 
-    def handle_captcha(self, max_attempts=3):
-        """CAPTCHA 감지 및 수동 처리"""
+    def handle_captcha(self):
+        """Handle 'PRESS & HOLD' CAPTCHA if present (TV 크롤러와 동일)"""
         try:
-            time.sleep(2)
+            print("[INFO] Checking for CAPTCHA...")
 
-            # CAPTCHA 키워드 감지
-            captcha_keywords = ['press & hold', 'press and hold', 'human verification', 'robot or human', 'verify you are human']
+            # Check page content for CAPTCHA keywords
+            page_content = self.driver.page_source.lower()
+            if any(keyword in page_content for keyword in ['press & hold', 'press and hold', 'captcha', 'human verification']):
+                print("[WARNING] CAPTCHA keywords found in page")
+                print("[INFO] CAPTCHA detection - waiting 60 seconds for manual intervention...")
+                print("[INFO] Please solve CAPTCHA manually if present")
 
-            for attempt in range(max_attempts):
-                page_content = self.driver.page_source.lower()
+                # Save screenshot for debugging
+                try:
+                    self.driver.save_screenshot(f"captcha_screen_{int(time.time())}.png")
+                    print("[INFO] Screenshot saved for debugging")
+                except:
+                    pass
 
-                if not any(keyword in page_content for keyword in captcha_keywords):
-                    if attempt > 0:
-                        print("[OK] CAPTCHA 해결됨")
-                    return True
-
-                print(f"[WARNING] CAPTCHA 감지! (시도 {attempt + 1}/{max_attempts})")
-                print("[INFO] 브라우저에서 CAPTCHA를 수동으로 해결한 후 엔터를 누르세요...")
-                input()
-
-            return True
+                time.sleep(60)
+                return True
+            else:
+                print("[INFO] No CAPTCHA detected")
+                return True
 
         except Exception as e:
             print(f"[WARNING] CAPTCHA handling error: {e}")
