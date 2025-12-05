@@ -65,8 +65,9 @@ class WalmartMainCrawler(BaseCrawler):
         self.driver = None
         self.wait = None
 
-        self.test_count = 5  # 테스트 모드
+        self.test_count = 2  # 테스트 모드
         self.max_products = 300  # 운영 모드
+        self.max_pages = 10  # 최대 페이지 수
         self.current_rank = 0
         self.browser_restart_interval = 5  # N페이지마다 브라우저 재시작
         self.saved_urls = set()  # 중복 URL 체크용
@@ -876,7 +877,7 @@ class WalmartMainCrawler(BaseCrawler):
             self.saved_urls = set()  # 중복 URL 체크용 초기화
             page_num = 1
 
-            while total_products < target_products:
+            while total_products < target_products and page_num <= self.max_pages:
                 products = self.crawl_page(page_num)
 
                 if not products:
