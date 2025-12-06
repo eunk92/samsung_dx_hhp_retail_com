@@ -7,8 +7,8 @@ OpenAI API를 활용한 경쟁사 제품 분석 크롤러
 ================================================================================
 실행 모드
 ================================================================================
-- 운영 모드: 10초 내 입력 없으면 자동 실행 (market_competitor 테이블에 저장)
-- 테스트 모드: 't' 입력 시 실행 (test_market_competitor 테이블에 저장)
+- 운영 모드: 10초 내 입력 없으면 자동 실행 (market_comp_product 테이블에 저장)
+- 테스트 모드: 't' 입력 시 실행 (test_market_comp_product 테이블에 저장)
 
 ================================================================================
 필요 패키지
@@ -146,7 +146,7 @@ class DatabaseManager:
         self.conn = None
         self.cursor = None
         self.test_mode = test_mode
-        self.table_name = 'test_market_competitor' if test_mode else 'market_competitor'
+        self.table_name = 'test_market_comp_product' if test_mode else 'market_comp_product'
 
     def connect(self):
         """DB 연결"""
@@ -582,11 +582,16 @@ class CompetitorAnalyzer:
             competitor_brands: [(id, product_line, keyword), ...]
             calendar_week: 캘린더 주차
             dry_run: True이면 DB 저장 없이 OpenAI 응답만 로그에 출력
+
+        Returns:
+            tuple: (success_count, fail_count, comp_products_list)
+                   comp_products_list는 dry_run일 때만 반환 (이벤트 분석용)
         """
         BATCH_SIZE = 10
         total_success = 0
         total_fail = 0
         analysis_results = []
+        dry_run_products = []  # DRY RUN용 제품 목록 (brand, product_name) 튜플
 
         # 카테고리별 Samsung 제품 그룹화
         samsung_by_category = {}
@@ -644,6 +649,9 @@ class CompetitorAnalyzer:
                     print_log("INFO", f"[DRY RUN] {samsung_keyword} vs [{', '.join(comp_brands)}]")
                     for r in results:
                         print_log("INFO", f"[DRY RUN] {r['comp_brand']}: {r['comp_sku_name']}")
+                        # DRY RUN용 제품 목록 수집 (info_not_available 제외)
+                        if r['success'] and r['comp_sku_name'] != 'info_not_available':
+                            dry_run_products.append((r['comp_brand'], r['comp_sku_name']))
                     print_log("INFO", f"[DRY RUN] OpenAI 응답:")
                     print_log("INFO", response_json)
                     print_log("INFO", f"=" * 50)
@@ -672,7 +680,12 @@ class CompetitorAnalyzer:
             total_success += success
             total_fail += fail
 
-        return total_success, total_fail
+        # DRY RUN일 때는 제품 목록도 반환 (중복 제거 - 튜플이므로 set 사용 가능)
+        if dry_run:
+            unique_products = list(set(dry_run_products))
+            return total_success, total_fail, unique_products
+
+        return total_success, total_fail, None
 
     def save_batch(self, results, calendar_week):
         """배치 저장"""
@@ -752,18 +765,261 @@ class CompetitorAnalyzer:
             print_log("INFO", f"분석 조합 수: {total_combinations}개")
 
             calendar_week = self.generate_calendar_week()
-            success, fail = self.analyze_all_products(
+            success, fail, dry_run_products = self.analyze_all_products(
                 samsung_products, competitor_brands, calendar_week, dry_run=self.dry_run
             )
             self.print_summary(success, fail, total_combinations)
 
+            # DRY RUN일 때 제품 목록 반환
+            return dry_run_products
+
         except Exception as e:
             print_log("ERROR", f"실행 오류: {e}")
             traceback.print_exc()
+            return None
 
         finally:
-            if self.test_mode:
-                input("\n엔터키를 누르면 종료합니다...")
+            self.cleanup()
+
+
+# ============================================================================
+# 이벤트 날짜 분석기
+# ============================================================================
+
+class EventDateAnalyzer:
+    """경쟁제품 이벤트 날짜 분석기"""
+
+    def __init__(self, test_mode=False, limit=None, dry_run=False):
+        self.test_mode = test_mode
+        self.limit = limit
+        self.dry_run = dry_run
+        self.db = DatabaseManager(test_mode=test_mode)
+        self.openai = None
+        self.event_table_name = 'test_market_comp_event' if test_mode else 'market_comp_event'
+
+    def setup(self):
+        """초기화"""
+        if not self.db.connect():
+            return False
+
+        try:
+            self.openai = OpenAIClient(OPENAI_API_KEY)
+            print_log("INFO", "OpenAI 클라이언트 초기화 완료")
+        except Exception as e:
+            print_log("ERROR", f"OpenAI 클라이언트 초기화 실패: {e}")
+            return False
+
+        return True
+
+    def cleanup(self):
+        """정리"""
+        self.db.disconnect()
+
+    def get_competitor_products(self):
+        """market_comp_product 테이블에서 경쟁제품 조회 (brand, product_name 튜플)"""
+        query = f"""
+            SELECT DISTINCT comp_brand, comp_series_name
+            FROM {self.db.table_name}
+            WHERE comp_series_name IS NOT NULL
+              AND comp_series_name != ''
+              AND comp_series_name != 'info_not_available'
+        """
+        if self.limit:
+            query += f" LIMIT {self.limit}"
+
+        self.db.execute(query)
+        return [(row[0], row[1]) for row in self.db.fetchall()]
+
+    def generate_event_prompt(self, product_name):
+        """이벤트 날짜 분석 프롬프트 생성"""
+        prompt = f"""Product name: {product_name}
+Use the product name above to retrieve only publicly confirmed launch and pre-order information, specifically for North America.
+Do NOT use global dates unless they were officially confirmed for North America.
+
+Your task is to retrieve factual information about the product's launch schedule and pre-order details
+ONLY if such information is publicly known, verifiable, and relevant to the North American market.
+
+For the given product name, extract the following:
+- "comp_sku_name": Exact product name provided in the input.
+- "comp_launch_date": The official public release or launch date in North America (YYYY-MM-DD)
+- "comp_preorder": yes/no depending on whether the product had a pre-order phase in North America.
+- "comp_pre_order_start_date": Official North America pre-order start date (YYYY-MM-DD).
+- "comp_preorder_end_date": Official North America pre-order end date (YYYY-MM-DD).
+
+### STRICT RULES YOU MUST FOLLOW:
+1. Use only publicly known and verifiable information for the North American market.
+2. If information is not confirmed for North America, return null.
+3. Do NOT guess, infer, invent, or assume release or pre-order dates.
+4. If the product has only rumors but no official NA dates, return null for dates.
+5. If multiple regional release dates exist, return only the earliest confirmed North America date.
+6. Output strictly in the following JSON format"""
+        return prompt
+
+    def analyze_event(self, product_name):
+        """OpenAI API 호출하여 이벤트 날짜 분석"""
+        prompt = self.generate_event_prompt(product_name)
+
+        try:
+            response = self.openai.client.chat.completions.create(
+                model=self.openai.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a product launch analyst. Provide accurate, factual information about product launch dates and pre-order schedules for the North American market. Always respond with valid JSON format."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0,
+                max_tokens=1000,
+                response_format={"type": "json_object"}
+            )
+
+            response_text = response.choices[0].message.content
+            response_time = datetime.now()
+
+            return {
+                'success': True,
+                'response': response_text,
+                'tokens_used': response.usage.total_tokens if response.usage else 0,
+                'response_time': response_time
+            }
+
+        except Exception as e:
+            print_log("ERROR", f"OpenAI API 호출 실패: {e}")
+            return {
+                'success': False,
+                'response': None,
+                'error': str(e)
+            }
+
+    def save_event_result(self, result_data, calendar_week, comp_brand):
+        """이벤트 분석 결과 저장"""
+        insert_query = f"""
+            INSERT INTO {self.event_table_name} (
+                country, comp_brand, comp_sku_name, comp_launch_date, comp_preorder,
+                comp_pre_order_start_date, comp_preorder_end_date,
+                calender_week, created_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        try:
+            self.db.cursor.execute(insert_query, (
+                'North America',
+                comp_brand,
+                result_data.get('comp_sku_name'),
+                result_data.get('comp_launch_date'),
+                result_data.get('comp_preorder'),
+                result_data.get('comp_pre_order_start_date'),
+                result_data.get('comp_preorder_end_date'),
+                calendar_week,
+                result_data.get('created_at')
+            ))
+            self.db.commit()
+            return True
+        except Exception as e:
+            print_log("ERROR", f"이벤트 결과 저장 실패: {e}")
+            self.db.rollback()
+            return False
+
+    def generate_calendar_week(self):
+        """캘린더 주차 생성"""
+        now = datetime.now()
+        week_number = now.isocalendar()[1]
+        return f"w{week_number}"
+
+    def run(self, products_from_memory=None):
+        """메인 실행
+
+        Args:
+            products_from_memory: DRY RUN 모드에서 메모리로 전달받은 제품 목록
+        """
+        if not logger:
+            setup_logger()
+
+        mode_str = "테스트 모드" if self.test_mode else "운영 모드"
+        dry_run_str = " [DRY RUN]" if self.dry_run else ""
+
+        print("\n" + "=" * 60)
+        print(f"Event Date Analyzer ({mode_str}){dry_run_str}")
+        if products_from_memory:
+            print(f"소스: 메모리 (CompetitorAnalyzer 결과)")
+        else:
+            print(f"소스 테이블: {self.db.table_name}")
+        print(f"저장 테이블: {self.event_table_name}")
+        print("=" * 60)
+
+        try:
+            if not self.setup():
+                return 0, 0
+
+            # 경쟁제품 목록 조회 (메모리 우선, 없으면 DB)
+            if products_from_memory:
+                products = products_from_memory
+                print_log("INFO", "메모리에서 제품 목록 사용")
+            else:
+                products = self.get_competitor_products()
+
+            if not products:
+                print_log("INFO", "분석할 경쟁제품이 없습니다.")
+                return 0, 0
+
+            print_log("INFO", f"분석 대상 제품: {len(products)}개")
+
+            calendar_week = self.generate_calendar_week()
+            total_success = 0
+            total_fail = 0
+
+            for idx, (comp_brand, product_name) in enumerate(products, 1):
+                print(f"\n[{idx}/{len(products)}] ", end="")
+                print_log("INFO", f"이벤트 분석 중: {comp_brand} - {product_name}")
+
+                result = self.analyze_event(product_name)
+
+                if result['success']:
+                    print_log("INFO", f"  -> 분석 완료 (토큰: {result['tokens_used']})")
+
+                    try:
+                        response_data = json.loads(result['response'])
+                        response_data['created_at'] = result.get('response_time')
+
+                        if self.dry_run:
+                            print_log("INFO", f"[DRY RUN] 응답: {result['response']}")
+                            total_success += 1
+                        else:
+                            if self.save_event_result(response_data, calendar_week, comp_brand):
+                                total_success += 1
+                            else:
+                                total_fail += 1
+
+                    except json.JSONDecodeError as e:
+                        print_log("WARNING", f"JSON 파싱 실패: {e}")
+                        total_fail += 1
+                else:
+                    print_log("WARNING", f"  -> 분석 실패: {result.get('error', 'Unknown error')}")
+                    total_fail += 1
+
+                # API 요청 간격
+                time.sleep(1)
+
+            # 결과 출력
+            print("\n" + "=" * 60)
+            print("이벤트 분석 완료")
+            print("=" * 60)
+            print(f"모드: {mode_str}")
+            print(f"성공: {total_success}건")
+            print(f"실패: {total_fail}건")
+
+            return total_success, total_fail
+
+        except Exception as e:
+            print_log("ERROR", f"실행 오류: {e}")
+            traceback.print_exc()
+            return 0, 0
+
+        finally:
             self.cleanup()
 
 
@@ -773,12 +1029,12 @@ class CompetitorAnalyzer:
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("Market Competitor Analyzer (OpenAI)")
+    print("Market Competitor & Event Analyzer (OpenAI)")
     print("=" * 60)
     print("\n[모드 선택]")
-    print("  - 't' 입력: 테스트 모드 (test_market_competitor 테이블)")
+    print("  - 't' 입력: 테스트 모드 (test_market_comp_product/event 테이블)")
     print("  - 'd' 입력: DRY RUN 모드 (OpenAI 응답만 로그에 출력, DB 저장 안함)")
-    print("  - 10초 내 입력 없음: 운영 모드 (market_competitor 테이블)")
+    print("  - 10초 내 입력 없음: 운영 모드 (market_comp_product/event 테이블)")
     print()
 
     user_input = get_input_with_timeout("모드 선택 (t=테스트, d=DRY RUN, 10초 후 자동 운영모드): ", timeout=10)
@@ -792,12 +1048,25 @@ if __name__ == "__main__":
         test_count_input = input("  test_count: ").strip()
         test_count = int(test_count_input) if test_count_input else None
 
-        analyzer = CompetitorAnalyzer(
+        # 1단계: 경쟁제품 분석
+        competitor_analyzer = CompetitorAnalyzer(
             test_mode=True,
             test_product_line=test_product_line,
             test_count=test_count,
             dry_run=True
         )
+        dry_run_products = competitor_analyzer.run()
+
+        # 2단계: 이벤트 날짜 분석 (메모리에서 제품 목록 전달)
+        event_analyzer = EventDateAnalyzer(
+            test_mode=True,
+            limit=test_count,
+            dry_run=True
+        )
+        event_analyzer.run(products_from_memory=dry_run_products)
+
+        input("\n엔터키를 누르면 종료합니다...")
+
     elif user_input and user_input.lower().strip() == 't':
         test_mode = True
         print_log("INFO", "테스트 모드로 실행합니다.")
@@ -807,14 +1076,33 @@ if __name__ == "__main__":
         test_count_input = input("  test_count: ").strip()
         test_count = int(test_count_input) if test_count_input else None
 
-        analyzer = CompetitorAnalyzer(
+        # 1단계: 경쟁제품 분석
+        competitor_analyzer = CompetitorAnalyzer(
             test_mode=test_mode,
             test_product_line=test_product_line,
             test_count=test_count
         )
+        competitor_analyzer.run()
+
+        # 2단계: 이벤트 날짜 분석
+        event_analyzer = EventDateAnalyzer(
+            test_mode=test_mode,
+            limit=test_count
+        )
+        event_analyzer.run()
+
+        input("\n엔터키를 누르면 종료합니다...")
+
     else:
         test_mode = False
         print_log("INFO", "운영 모드로 실행합니다.")
-        analyzer = CompetitorAnalyzer(test_mode=test_mode)
 
-    analyzer.run()
+        # 1단계: 경쟁제품 분석
+        competitor_analyzer = CompetitorAnalyzer(test_mode=test_mode)
+        competitor_analyzer.run()
+
+        # 2단계: 이벤트 날짜 분석
+        event_analyzer = EventDateAnalyzer(test_mode=test_mode)
+        event_analyzer.run()
+
+        input("\n엔터키를 누르면 종료합니다...")
