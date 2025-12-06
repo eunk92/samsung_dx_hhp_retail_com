@@ -63,6 +63,7 @@ cookies/
 amazon/cookies/
 
 # Screenshots and debug files
+capture/
 captcha_screen_*.png
 walmart_robot_page_*.html
 login_page_debug.html

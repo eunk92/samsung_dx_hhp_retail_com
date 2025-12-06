@@ -631,7 +631,7 @@ class AmazonDetailCrawler(BaseCrawler):
                     product['original_sku_price'] = original_sku_price
 
                 # shipping_info (여러 요소는 쉼표로 연결)
-                shipping_info = self.safe_extract_join(tree, 'shipping_info', ', ')
+                shipping_info = self.safe_extract_join(tree, 'shipping_info', ' ')
                 if shipping_info:
                     shipping_info = shipping_info.replace('Details', '').strip()
                     if shipping_info:
