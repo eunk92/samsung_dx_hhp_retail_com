@@ -427,7 +427,7 @@ class BaseCrawler:
         if account_name == 'Amazon':
             self.set_amazon_zip_code('10001')
 
-    def set_amazon_zip_code(self, zip_code='10001'):
+    def set_amazon_zip_code(self, zip_code='10001', max_retries=3):
         """
         Amazon 배송 지역 ZIP 코드 설정 (뉴욕: 10001)
 
@@ -437,6 +437,7 @@ class BaseCrawler:
 
         Args:
             zip_code (str): ZIP 코드 (기본: 10001 - 맨해튼)
+            max_retries (int): 최대 재시도 횟수 (기본: 3)
 
         Returns:
             bool: 설정 성공 시 True, 실패 시 False
@@ -449,29 +450,59 @@ class BaseCrawler:
         try:
             print(f"[INFO] Setting Amazon ZIP code to {zip_code}...")
 
-            # Amazon 메인 페이지 접속
+            # Amazon 메인 페이지 접속 (1회만)
             self.driver.get('https://www.amazon.com')
-            time.sleep(random.uniform(3, 5))
+            time.sleep(random.uniform(5, 8))
 
-            # "Deliver to" 버튼 클릭
-            deliver_to_btn = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.ID, 'nav-global-location-popover-link'))
-            )
-            deliver_to_btn.click()
-            time.sleep(random.uniform(1, 2))
+            # "Deliver to" 버튼 클릭 (재시도 포함)
+            for attempt in range(1, max_retries + 1):
+                try:
+                    deliver_to_btn = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.ID, 'nav-global-location-popover-link'))
+                    )
+                    deliver_to_btn.click()
+                    time.sleep(random.uniform(2, 3))
+                    break
+                except Exception as e:
+                    print(f"[WARNING] Deliver to button not found (attempt {attempt}/{max_retries}): {e}")
+                    if attempt < max_retries:
+                        print(f"[INFO] Waiting 3 seconds before retry...")
+                        time.sleep(3)
+                    else:
+                        raise
 
-            # ZIP 코드 입력 필드 찾기
-            zip_input = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.ID, 'GLUXZipUpdateInput'))
-            )
-            zip_input.clear()
-            zip_input.send_keys(zip_code)
-            time.sleep(random.uniform(0.5, 1))
+            # ZIP 코드 입력 필드 찾기 (재시도 포함)
+            for attempt in range(1, max_retries + 1):
+                try:
+                    zip_input = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.ID, 'GLUXZipUpdateInput'))
+                    )
+                    zip_input.clear()
+                    zip_input.send_keys(zip_code)
+                    time.sleep(random.uniform(1, 2))
+                    break
+                except Exception as e:
+                    print(f"[WARNING] ZIP input field not found (attempt {attempt}/{max_retries}): {e}")
+                    if attempt < max_retries:
+                        print(f"[INFO] Waiting 3 seconds before retry...")
+                        time.sleep(3)
+                    else:
+                        raise
 
-            # Apply 버튼 클릭
-            apply_btn = self.driver.find_element(By.CSS_SELECTOR, '#GLUXZipUpdate input[type="submit"], #GLUXZipUpdate .a-button-input')
-            apply_btn.click()
-            time.sleep(random.uniform(2, 3))
+            # Apply 버튼 클릭 (재시도 포함)
+            for attempt in range(1, max_retries + 1):
+                try:
+                    apply_btn = self.driver.find_element(By.CSS_SELECTOR, '#GLUXZipUpdate input[type="submit"], #GLUXZipUpdate .a-button-input')
+                    apply_btn.click()
+                    time.sleep(random.uniform(3, 5))
+                    break
+                except Exception as e:
+                    print(f"[WARNING] Apply button not found (attempt {attempt}/{max_retries}): {e}")
+                    if attempt < max_retries:
+                        print(f"[INFO] Waiting 3 seconds before retry...")
+                        time.sleep(3)
+                    else:
+                        raise
 
             # 팝업 닫기 (있는 경우)
             try:

@@ -36,6 +36,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.setup import setup_environment
 setup_environment(__file__)
 
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from common.base_crawler import BaseCrawler
 
 
@@ -58,6 +62,7 @@ class AmazonMainCrawler(BaseCrawler):
         self.standalone = batch_id is None
         self.test_count = 1  # 테스트 모드
         self.max_products = 300  # 운영 모드
+        self.max_pages = 20  # 최대 페이지 수
         self.saved_urls = set()  # 중복 URL 추적용
 
     def initialize(self):
@@ -206,6 +211,74 @@ class AmazonMainCrawler(BaseCrawler):
 
         return False
 
+    def handle_captcha(self):
+        """CAPTCHA 자동 해결"""
+        try:
+            time.sleep(1)
+            page_html = self.driver.page_source.lower()
+
+            captcha_keywords = ['captcha', 'robot', 'human verification', 'press & hold', 'press and hold']
+            if not any(keyword in page_html for keyword in captcha_keywords):
+                return True
+
+            captcha_selectors = [
+                (By.XPATH, "//button[contains(text(), 'Continue shopping')]"),
+                (By.XPATH, "//button[contains(@aria-label, 'CAPTCHA')]"),
+                (By.CSS_SELECTOR, "button[type='submit']"),
+                (By.ID, "captchacharacters"),
+                (By.XPATH, "//form[@action='/errors/validateCaptcha']"),
+            ]
+
+            captcha_button = None
+            captcha_type = None
+
+            for by, selector in captcha_selectors:
+                try:
+                    element = WebDriverWait(self.driver, 3).until(
+                        EC.presence_of_element_located((by, selector))
+                    )
+                    if element.is_displayed():
+                        captcha_button = element
+                        captcha_type = "button" if by != By.ID else "input"
+                        break
+                except:
+                    continue
+
+            if not captcha_button:
+                return True
+
+            if captcha_type == "input":
+                print("[WARNING] CAPTCHA 입력 필요 - 60초 대기...")
+                time.sleep(60)
+                return True
+
+            try:
+                actions = ActionChains(self.driver)
+                actions.move_to_element(captcha_button)
+                actions.pause(random.uniform(0.5, 1.0))
+                actions.click()
+                actions.perform()
+                time.sleep(random.uniform(3, 5))
+
+                new_page_html = self.driver.page_source.lower()
+                if not any(keyword in new_page_html for keyword in captcha_keywords):
+                    print("[OK] CAPTCHA 자동 해결 성공")
+                    return True
+                else:
+                    print("[WARNING] CAPTCHA 자동 해결 실패 - 60초 대기...")
+                    time.sleep(60)
+                    return True
+
+            except Exception:
+                print("[WARNING] CAPTCHA 클릭 실패 - 60초 대기...")
+                time.sleep(60)
+                return True
+
+        except Exception as e:
+            print(f"[ERROR] CAPTCHA handling failed: {e}")
+            traceback.print_exc()
+            return False
+
     def normalize_amazon_url(self, url):
         """Amazon URL을 /dp/ASIN 기준으로 정규화 (중복 판별용)"""
         if not url:
@@ -309,15 +382,39 @@ class AmazonMainCrawler(BaseCrawler):
                     product_url_raw = self.safe_extract(item, 'product_url')
                     product_url = f"https://www.amazon.com{product_url_raw}" if product_url_raw and product_url_raw.startswith('/') else product_url_raw
 
+                    # number_of_units_purchased_past_month 추출 및 변환 (3K+ → 3000, 3M+ → 3000000)
+                    number_of_units_purchased_past_month_raw = self.safe_extract(item, 'number_of_units_purchased_past_month')
+                    number_of_units_purchased_past_month = None
+                    if number_of_units_purchased_past_month_raw:
+                        # 숫자 바로 뒤에 K 또는 M이 있는지 확인 (예: 3K+, 100M+)
+                        match = re.search(r'(\d+)\s*([KkMm])?', number_of_units_purchased_past_month_raw)
+                        if match:
+                            num = int(match.group(1))
+                            suffix = match.group(2).upper() if match.group(2) else None
+                            if suffix == 'M':
+                                number_of_units_purchased_past_month = str(num * 1000000)
+                            elif suffix == 'K':
+                                number_of_units_purchased_past_month = str(num * 1000)
+                            else:
+                                number_of_units_purchased_past_month = str(num)
+
+                    # available_quantity_for_purchase: 숫자만 추출
+                    available_quantity_for_purchase = None
+                    available_quantity_for_purchase_raw = self.safe_extract(item, 'available_quantity_for_purchase')
+                    if available_quantity_for_purchase_raw:
+                        match = re.search(r'(\d+)', available_quantity_for_purchase_raw)
+                        if match:
+                            available_quantity_for_purchase = match.group(1)
+
                     product_data = {
                         'account_name': self.account_name,
                         'page_type': self.page_type,
                         'retailer_sku_name': self.safe_extract(item, 'retailer_sku_name'),
-                        'number_of_units_purchased_past_month': self.safe_extract(item, 'number_of_units_purchased_past_month'),
+                        'number_of_units_purchased_past_month': number_of_units_purchased_past_month,
                         'final_sku_price': self.safe_extract(item, 'final_sku_price'),
                         'original_sku_price': self.safe_extract(item, 'original_sku_price'),
                         'shipping_info': self.safe_extract_join(item, 'shipping_info', separator=", "),
-                        'available_quantity_for_purchase': self.safe_extract(item, 'available_quantity_for_purchase'),
+                        'available_quantity_for_purchase': available_quantity_for_purchase,
                         'discount_type': self.safe_extract(item, 'discount_type'),
                         'main_rank': 0,  # save_products()에서 재할당
                         'page_number': page_number,
@@ -467,7 +564,7 @@ class AmazonMainCrawler(BaseCrawler):
             self.current_rank = 0
             page_num = 1
 
-            while total_products < target_products:
+            while total_products < target_products and page_num <= self.max_pages:
                 products = self.crawl_page(page_num)
 
                 if not products:

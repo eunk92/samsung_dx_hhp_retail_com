@@ -11,10 +11,9 @@ DataExtractor - 데이터 추출 유틸리티
 사용법:
     from common import data_extractor
 
-    price = data_extractor.extract_price("$1,234.56")  # "1,234.56"
-    rating = data_extractor.extract_rating("4.5 out of 5")  # "4.5"
-    count = data_extractor.extract_review_count("3,572 reviews")  # "3,572"
+    price = data_extractor.extract_numeric_value("$1,234.56")  # "1,234.56"
     no_reviews = data_extractor.get_no_reviews_text("Amazon")  # "No customer reviews"
+    text = data_extractor.extract_text_before_or_after("Hello World", "World", "before")  # "Hello"
 
 모든 크롤러에서 독립적으로 import하여 사용 가능
 """
@@ -55,59 +54,6 @@ def extract_numeric_value(text, include_comma=True, include_decimal=True):
     return match.group(0) if match else None
 
 
-
-def extract_rating(text):
-    """
-    별점 텍스트에서 숫자 추출 (소수점 포함, 쉼표 제외)
-
-    쓰임새:
-    - 별점 데이터 후처리
-
-    Args:
-        text (str): 원본 텍스트
-
-    Returns:
-        str or None: 별점 숫자, 숫자 없으면 원본 text, text가 None이면 None
-
-    Examples:
-        - "4.5 out of 5 stars" → "4.5"
-        - "3.8 out of 5" → "3.8"
-        - "Not yet reviewed" → "Not yet reviewed"
-        - None → None
-    """
-    result = extract_numeric_value(text, include_comma=False, include_decimal=True)
-    if result:
-        return result
-
-    return text
-
-
-def extract_review_count(text):
-    """
-    리뷰 개수 텍스트에서 숫자 추출 (쉼표 제거, 소수점 제외)
-
-    쓰임새:
-    - 리뷰 개수, 판매량 등 정수 데이터 후처리
-
-    Args:
-        text (str): 원본 텍스트
-
-    Returns:
-        str or None: 리뷰 개수 (쉼표 제거된 숫자), 숫자 없으면 원본 text, text가 None이면 None
-
-    Examples:
-        - "3,572등급 글로벌 평점" → "3572"
-        - "1234 reviews" → "1234"
-        - "Not yet reviewed" → "Not yet reviewed"
-        - None → None
-    """
-    result = extract_numeric_value(text, include_comma=True, include_decimal=False)
-    if result:
-        return result.replace(',', '')
-
-    return text
-
-
 def get_no_reviews_text(account_name):
     """
     쇼핑몰별 리뷰 없음 텍스트 반환
@@ -130,146 +76,6 @@ def get_no_reviews_text(account_name):
     }
 
     return no_reviews_mapping.get(account_name, 'No reviews')
-
-
-def extract_star_ratings_count(tree, count_of_reviews, xpath, account_name):
-    """
-    별점 분포를 추출하여 "5star:개수,4star:개수,..." 형식으로 변환
-    쇼핑몰별 분기 처리
-
-    Args:
-        tree: lxml HTML element
-        count_of_reviews (str): 전체 리뷰 개수 (예: "3,572")
-        xpath (str): DB에서 로드한 XPath
-        account_name (str): 쇼핑몰 계정명 (예: "Amazon", "BestBuy")
-
-    Returns:
-        str: 별점 분포 문자열 또는 None
-
-    Examples: "5star:2931,4star:286,3star:107,2star:36,1star:214"
-    """
-    if not xpath or not account_name:
-        return None
-
-    # 쇼핑몰별 분기 처리
-    if account_name == 'Amazon':
-        return _extract_star_ratings_count_amazon(tree, count_of_reviews, xpath, account_name)
-    else:
-        # 기타 쇼핑몰: 개수를 직접 추출
-        return _extract_star_ratings_count_generic(tree, xpath, account_name)
-
-
-def _extract_star_ratings_count_amazon(tree, count_of_reviews, xpath, account_name):
-    """
-    Amazon 전용 별점 분포 추출 로직
-
-    Args:
-        tree: lxml HTML element
-        count_of_reviews (str): 전체 리뷰 개수 (예: "3,572")
-        xpath (str): DB에서 로드한 XPath
-        account_name (str): 쇼핑몰 계정명
-
-    Returns:
-        str: 별점 분포 문자열 또는 쇼핑몰별 리뷰 없음 텍스트
-    """
-    try:
-        # count_of_reviews 검증
-        if not count_of_reviews or not isinstance(count_of_reviews, str):
-            return get_no_reviews_text(account_name)
-
-        # 전체 리뷰 수를 숫자로 변환 (숫자가 아니면 리뷰 없음 텍스트 반환)
-        try:
-            total_count = int(count_of_reviews.replace(',', ''))
-        except (ValueError, AttributeError):
-            print(f"[WARNING] Invalid count_of_reviews format: {count_of_reviews}")
-            return get_no_reviews_text(account_name)
-
-        # XPath로 퍼센트 텍스트 추출
-        percent_texts = tree.xpath(xpath)
-
-        if not percent_texts or len(percent_texts) < 5:
-            return get_no_reviews_text(account_name)
-
-        # 마지막 5개 텍스트가 실제 퍼센트 (첫 5개는 aria-hidden)
-        actual_percents = percent_texts[-5:]
-
-        star_data = []
-        star_names = ['5star', '4star', '3star', '2star', '1star']
-
-        for i, percent_text in enumerate(actual_percents):
-            # "82%" → 82
-            percent_str = percent_text.strip().replace('%', '')
-            try:
-                percent = int(percent_str)
-            except ValueError:
-                print(f"[WARNING] Invalid percent format: {percent_text}")
-                continue
-
-            # 개수 계산 (전체 리뷰 수 * 퍼센트 / 100, 반올림)
-            count = round(total_count * percent / 100)
-
-            star_data.append(f"{star_names[i]}:{count}")
-
-        return ','.join(star_data) if star_data else get_no_reviews_text(account_name)
-
-    except Exception as e:
-        print(f"[WARNING] Failed to extract Amazon star ratings distribution: {e}")
-        return None
-
-
-def _extract_star_ratings_count_generic(tree, xpath, account_name):
-    """
-    기타 쇼핑몰 전용 별점 분포 추출 로직
-    개수를 직접 추출하여 포맷팅
-
-    Args:
-        tree: lxml HTML element
-        xpath (str): DB에서 로드한 XPath
-        account_name (str): 쇼핑몰 계정명
-
-    Returns:
-        str: 별점 분포 문자열 또는 쇼핑몰별 리뷰 없음 텍스트
-
-    Examples:
-        - "5star:3712,4star:493,3star:254,2star:109,1star:478"
-        - Input: ["74% (3,712)", "10% (493)", ...] → "5star:3712,4star:493,..."
-    """
-    try:
-        # XPath로 개수 텍스트 추출
-        count_texts = tree.xpath(xpath)
-
-        if not count_texts or len(count_texts) < 5:
-            return get_no_reviews_text(account_name)
-
-        star_data = []
-        star_names = ['5star', '4star', '3star', '2star', '1star']
-
-        # 첫 5개 또는 마지막 5개 중 선택 (쇼핑몰에 따라 다를 수 있음)
-        counts_to_process = count_texts[:5] if len(count_texts) >= 5 else count_texts
-
-        for i, count_text in enumerate(counts_to_process):
-            if i >= 5:  # 최대 5개만 처리
-                break
-
-            # Walmart 형식: "74% (3,712)" → "3,712" 추출
-            # 괄호 안의 숫자를 추출
-            match = re.search(r'\(([0-9,]+)\)', count_text.strip())
-            if match:
-                count_str = match.group(1)
-            else:
-                # 괄호가 없으면 기존 방식으로 추출
-                count_str = extract_review_count(count_text.strip())
-
-            if count_str:
-                # 쉼표 제거하여 순수 숫자로 변환
-                count_clean = count_str.replace(',', '')
-                star_data.append(f"{star_names[i]}:{count_clean}")
-
-        return ','.join(star_data) if len(star_data) == 5 else None
-
-    except Exception as e:
-        print(f"[WARNING] Failed to extract generic star ratings distribution: {e}")
-        return None
 
 
 def extract_text_before_or_after(raw_text, cut_text, position='before'):

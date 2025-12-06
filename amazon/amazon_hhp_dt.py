@@ -62,11 +62,37 @@ class AmazonDetailCrawler(BaseCrawler):
         self.test_mode = test_mode
         self.standalone = batch_id is None
 
+    def extract_review_count(self, text):
+        """리뷰 개수 텍스트에서 숫자 추출 (쉼표 유지)"""
+        match = re.search(r'[\d,]+', text) if text else None
+        return match.group(0) if match else None
+
+    def extract_rating(self, text):
+        """별점 텍스트에서 숫자 추출 (소수점 포함)"""
+        match = re.search(r'\d+\.?\d*', text) if text else None
+        return match.group(0) if match else None
+
+    def convert_units_purchased_past(self, raw_value):
+        """구매 수량 변환 (3K+ → 3000, 3M+ → 3000000)"""
+        if not raw_value:
+            return None
+        # 숫자 바로 뒤에 K 또는 M이 있는지 확인 (예: 3K+, 100M+)
+        match = re.search(r'(\d+)\s*([KkMm])?', raw_value)
+        if not match:
+            return None
+        num = int(match.group(1))
+        suffix = match.group(2).upper() if match.group(2) else None
+        if suffix == 'M':
+            return str(num * 1000000)
+        elif suffix == 'K':
+            return str(num * 1000)
+        return str(num)
+
     def initialize(self):
         """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
         # 1. batch_id 설정
         if not self.batch_id:
-            self.batch_id = 'a_20251126_151351'
+            self.batch_id = 'a_20251206_154228'
 
         # 2. DB 연결
         if not self.connect_db():
@@ -168,7 +194,7 @@ class AmazonDetailCrawler(BaseCrawler):
                     main_rank, bsr_rank, product_url, calendar_week, batch_id
                 FROM amazon_hhp_product_list
                 WHERE account_name = %s AND batch_id = %s AND product_url IS NOT NULL
-                ORDER BY main_rank ASC NULLS LAST, bsr_rank ASC NULLS LAST
+                ORDER BY id
             """
 
             cursor.execute(query, (self.account_name, self.batch_id))
@@ -568,10 +594,62 @@ class AmazonDetailCrawler(BaseCrawler):
             actual_url = self.driver.current_url
             item = self.extract_asin_from_url(actual_url)
 
+            # final_sku_price 추출 (기존 값이 빈 경우)
+            final_sku_price = product.get('final_sku_price')
+            if not final_sku_price:
+                # current_price xpath로 추출 시도
+                final_sku_price = self.safe_extract(tree, 'final_sku_price')
+
+                # 가격 추출 실패 시 availability_status 확인
+                if not final_sku_price:
+                    # (No featured offers available)
+                    final_sku_price = self.safe_extract(tree, 'final_sku_price_nofeatured') 
+                    if not final_sku_price:
+                        # (Currently unavailable)
+                        final_sku_price = self.safe_extract(tree, 'final_sku_price_unavailable') 
+
+                # product에 업데이트
+                if final_sku_price:
+                    product['final_sku_price'] = final_sku_price
+
+            # bsr인 경우
+            if product.get('page_type') == 'bsr':
+                # number_of_units_purchased_past_month
+                number_of_units_purchased_past_month_raw = self.safe_extract(tree, 'number_of_units_purchased_past_month')
+                number_of_units_purchased_past_month = self.convert_units_purchased_past(number_of_units_purchased_past_month_raw)
+                if number_of_units_purchased_past_month:
+                    product['number_of_units_purchased_past_month'] = number_of_units_purchased_past_month
+
+                # discount_type
+                discount_type = self.safe_extract(tree, 'discount_type')
+                if discount_type:
+                    product['discount_type'] = discount_type
+                    
+                # original_sku_price
+                original_sku_price = self.safe_extract(tree, 'original_sku_price')
+                if original_sku_price:
+                    product['original_sku_price'] = original_sku_price
+
+                # shipping_info (여러 요소는 쉼표로 연결)
+                shipping_info = self.safe_extract_join(tree, 'shipping_info', ', ')
+                if shipping_info:
+                    shipping_info = shipping_info.replace('Details', '').strip()
+                    if shipping_info:
+                        product['shipping_info'] = shipping_info
+
+                # available_quantity_for_purchase
+                available_quantity_for_purchase = self.safe_extract(tree, 'available_quantity_for_purchase')
+                if available_quantity_for_purchase:
+                    match = re.search(r'(\d+)', available_quantity_for_purchase)
+                    if match:
+                        product['available_quantity_for_purchase'] = match.group(1)
+
+                
+
             # Trade-in 섹션은 JS로 늦게 로드될 수 있으므로 최신 HTML로 재파싱
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
-            trade_in = self.safe_extract(tree, 'trade_in')
+            
             hhp_carrier = self.safe_extract(tree, 'hhp_carrier')
             sku_popularity = self.safe_extract(tree, 'sku_popularity')
             bundle = self.safe_extract(tree, 'bundle')
@@ -579,6 +657,10 @@ class AmazonDetailCrawler(BaseCrawler):
             retailer_membership_discounts = data_extractor.extract_text_before_or_after(
                 retailer_membership_discounts_raw, 'Join Prime', 'before'
             )
+           
+            trade_in = self.safe_extract_join(tree, 'trade_in', ' ')
+            if not trade_in:
+                trade_in = self.safe_extract(tree, 'trade_in_fallback')
 
             # Additional details 버튼 클릭
             hhp_storage = None
@@ -658,18 +740,15 @@ class AmazonDetailCrawler(BaseCrawler):
 
                     if count_of_reviews is None:
                         count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
-                        count_of_reviews = data_extractor.extract_review_count(count_of_reviews_raw)
+                        count_of_reviews = self.extract_review_count(count_of_reviews_raw)
+                        count_of_star_ratings = count_of_reviews
 
                     if star_rating is None:
                         star_rating_raw = self.safe_extract(tree, 'star_rating')
-                        star_rating = data_extractor.extract_rating(star_rating_raw)
-
-                    if count_of_star_ratings is None:
-                        count_of_star_ratings_xpath = self.xpaths.get('count_of_star_ratings', {}).get('xpath')
-                        count_of_star_ratings = data_extractor.extract_star_ratings_count(tree, count_of_reviews, count_of_star_ratings_xpath, self.account_name)
+                        star_rating = self.extract_rating(star_rating_raw)
 
                     # 필수 필드 모두 추출 성공하면 종료
-                    if star_rating and count_of_reviews and count_of_star_ratings:
+                    if star_rating and count_of_reviews:
                         break
 
                     if attempt < MAX_RETRY:
@@ -679,7 +758,6 @@ class AmazonDetailCrawler(BaseCrawler):
                         missing = []
                         if not star_rating: missing.append('star_rating')
                         if not count_of_reviews: missing.append('count_of_reviews')
-                        if not count_of_star_ratings: missing.append('count_of_star_ratings')
                         if missing:
                             print(f"[WARNING] 리뷰 데이터 추출 실패 (시도 {attempt}/{MAX_RETRY}) - 미추출: {', '.join(missing)}")
 

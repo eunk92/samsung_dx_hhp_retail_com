@@ -34,6 +34,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.setup import setup_environment
 setup_environment(__file__)
 
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from common.base_crawler import BaseCrawler
 
 
@@ -55,6 +59,7 @@ class AmazonBSRCrawler(BaseCrawler):
         self.standalone = batch_id is None
         self.test_count = 1  # 테스트 모드
         self.max_products = 100  # 운영 모드
+        self.max_pages = 2  # 최대 페이지 수
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 로그 정리"""
@@ -207,6 +212,74 @@ class AmazonBSRCrawler(BaseCrawler):
                 return True
 
         return False
+
+    def handle_captcha(self):
+        """CAPTCHA 자동 해결"""
+        try:
+            time.sleep(1)
+            page_html = self.driver.page_source.lower()
+
+            captcha_keywords = ['captcha', 'robot', 'human verification', 'press & hold', 'press and hold']
+            if not any(keyword in page_html for keyword in captcha_keywords):
+                return True
+
+            captcha_selectors = [
+                (By.XPATH, "//button[contains(text(), 'Continue shopping')]"),
+                (By.XPATH, "//button[contains(@aria-label, 'CAPTCHA')]"),
+                (By.CSS_SELECTOR, "button[type='submit']"),
+                (By.ID, "captchacharacters"),
+                (By.XPATH, "//form[@action='/errors/validateCaptcha']"),
+            ]
+
+            captcha_button = None
+            captcha_type = None
+
+            for by, selector in captcha_selectors:
+                try:
+                    element = WebDriverWait(self.driver, 3).until(
+                        EC.presence_of_element_located((by, selector))
+                    )
+                    if element.is_displayed():
+                        captcha_button = element
+                        captcha_type = "button" if by != By.ID else "input"
+                        break
+                except:
+                    continue
+
+            if not captcha_button:
+                return True
+
+            if captcha_type == "input":
+                print("[WARNING] CAPTCHA 입력 필요 - 60초 대기...")
+                time.sleep(60)
+                return True
+
+            try:
+                actions = ActionChains(self.driver)
+                actions.move_to_element(captcha_button)
+                actions.pause(random.uniform(0.5, 1.0))
+                actions.click()
+                actions.perform()
+                time.sleep(random.uniform(3, 5))
+
+                new_page_html = self.driver.page_source.lower()
+                if not any(keyword in new_page_html for keyword in captcha_keywords):
+                    print("[OK] CAPTCHA 자동 해결 성공")
+                    return True
+                else:
+                    print("[WARNING] CAPTCHA 자동 해결 실패 - 60초 대기...")
+                    time.sleep(60)
+                    return True
+
+            except Exception:
+                print("[WARNING] CAPTCHA 클릭 실패 - 60초 대기...")
+                time.sleep(60)
+                return True
+
+        except Exception as e:
+            print(f"[ERROR] CAPTCHA handling failed: {e}")
+            traceback.print_exc()
+            return False
 
     def normalize_amazon_url(self, url):
         """Amazon URL을 /dp/ASIN 기준으로 정규화 (중복 판별용)"""
@@ -504,7 +577,7 @@ class AmazonBSRCrawler(BaseCrawler):
             target_products = self.test_count if self.test_mode else self.max_products
             page_num = 1
 
-            while (total_insert + total_update) < target_products:
+            while (total_insert + total_update) < target_products and page_num <= self.max_pages:
                 products = self.crawl_page(page_num)
 
                 if not products:
