@@ -563,9 +563,11 @@ class AmazonMainCrawler(BaseCrawler):
             target_products = self.test_count if self.test_mode else self.max_products
             self.current_rank = 0
             page_num = 1
+            last_page = 0
 
             while total_products < target_products and page_num <= self.max_pages:
                 products = self.crawl_page(page_num)
+                last_page = page_num
 
                 if not products:
                     if page_num > 1:
@@ -583,7 +585,7 @@ class AmazonMainCrawler(BaseCrawler):
                 time.sleep(random.uniform(28, 32))
                 page_num += 1
 
-            print(f"[DONE] Page: {page_num}, Saved: {total_products}, batch_id: {self.batch_id}")
+            print(f"[DONE] Page: {last_page}, Saved: {total_products}, batch_id: {self.batch_id}")
             return True
 
         except Exception as e:
