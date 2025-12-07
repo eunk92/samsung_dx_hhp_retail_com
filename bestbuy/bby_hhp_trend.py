@@ -52,7 +52,7 @@ class BestBuyTrendCrawler(BaseCrawler):
         self.url_template = None
         self.current_rank = 0
 
-        self.test_count = 3  # 테스트 모드
+        self.test_count = 2  # 테스트 모드
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 로그 정리"""
@@ -111,12 +111,16 @@ class BestBuyTrendCrawler(BaseCrawler):
                     product_url_raw = self.safe_extract(item, 'product_url')
                     product_url = f"https://www.bestbuy.com{product_url_raw}" if product_url_raw and product_url_raw.startswith('/') else product_url_raw
 
+                    # savings 추출 후 "Save " 제거
+                    savings_raw = self.safe_extract(item, 'savings')
+                    savings = savings_raw.replace('Save ', '') if savings_raw else None
+
                     product_data = {
                         'account_name': self.account_name,
                         'page_type': self.page_type,
                         'retailer_sku_name': self.safe_extract(item, 'retailer_sku_name'),
                         'final_sku_price': self.safe_extract(item, 'final_sku_price'),
-                        'savings': self.safe_extract(item, 'savings'),
+                        'savings': savings,
                         'comparable_pricing': self.safe_extract(item, 'comparable_pricing'),
                         'trend_rank': self.current_rank,
                         'product_url': product_url,

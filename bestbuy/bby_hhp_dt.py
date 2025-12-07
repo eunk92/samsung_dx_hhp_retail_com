@@ -68,7 +68,7 @@ class BestBuyDetailCrawler(BaseCrawler):
         """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
         # batch_id 없으면 기본값 사용
         if not self.batch_id:
-            self.batch_id = 'b_20251127_090753'
+            self.batch_id = 'b_20251207_205850'
 
         if not self.connect_db():
             return False
@@ -186,8 +186,10 @@ class BestBuyDetailCrawler(BaseCrawler):
                 if trade_in is None:
                     trade_in = self.safe_extract(tree, 'trade_in')
 
-                # 필수 필드 모두 추출 성공하면 종료
+                # 필수 필드 모두 추출 성공하면 종료 (Not yet reviewed인 경우도 성공으로 간주)
                 if top_star_rating and top_count_of_reviews:
+                    break
+                if top_count_of_reviews and 'Not yet reviewed' in top_count_of_reviews:
                     break
 
                 if attempt < MAX_RETRY_TOP:
@@ -200,6 +202,35 @@ class BestBuyDetailCrawler(BaseCrawler):
                     if not trade_in: missing.append('trade_in')
                     if missing:
                         print(f"[WARNING] 상단 정보 추출 실패 (시도 {attempt}/{MAX_RETRY_TOP}) - 미추출: {', '.join(missing)}")
+
+            # ========== 1-1단계: final_sku_price 없으면 상세페이지에서 추출 ==========
+            if not product.get('final_sku_price'):
+                final_sku_price = self.safe_extract(tree, 'final_sku_price')
+                if final_sku_price:
+                    product['final_sku_price'] = final_sku_price
+
+            # ========== 1-2단계: original_sku_price 없으면 상세페이지에서 추출 ==========
+            if not product.get('original_sku_price'):
+                original_sku_price = self.safe_extract(tree, 'original_sku_price')
+                if original_sku_price:
+                    product['original_sku_price'] = original_sku_price
+
+            # ========== 1-3단계: trend인 경우 savings/pick_up/shipping availability 상세페이지에서 추출 ==========
+            if product.get('page_type') == 'trend':
+                if not product.get('savings'):
+                    savings_raw = self.safe_extract(tree, 'savings')
+                    if savings_raw:
+                        product['savings'] = savings_raw.replace('Save ', '')
+
+                if not product.get('pick_up_availability'):
+                    pick_up_raw = self.safe_extract_join(tree, 'pick_up_availability', separator=' ')
+                    if pick_up_raw:
+                        product['pick_up_availability'] = pick_up_raw
+
+                if not product.get('shipping_availability'):
+                    shipping_raw = self.safe_extract_join(tree, 'shipping_availability', separator=' ')
+                    if shipping_raw:
+                        product['shipping_availability'] = shipping_raw
 
             # ========== 2단계: HHP 스펙 추출 (specs_button 클릭 후 모달에서 추출) ==========
             hhp_carrier = None

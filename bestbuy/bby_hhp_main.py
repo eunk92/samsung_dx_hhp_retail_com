@@ -26,6 +26,7 @@ import os
 import time
 import random
 import traceback
+import re
 from datetime import datetime
 from lxml import html
 
@@ -52,7 +53,7 @@ class BestBuyMainCrawler(BaseCrawler):
         self.calendar_week = None
         self.url_template = None
 
-        self.test_count = 3  # 테스트 모드
+        self.test_count = 1  # 테스트 모드
         self.max_products = 300  # 운영 모드
         self.max_pages = 20  # 최대 페이지 수
         self.current_rank = 0
@@ -127,7 +128,10 @@ class BestBuyMainCrawler(BaseCrawler):
             traceback.print_exc()
 
     def crawl_page(self, page_number):
-        """페이지 크롤링: 페이지 로드 → 페이지네이션까지 스크롤 → HTML 파싱(최대 3회) → 제품 데이터 추출"""
+        """페이지 크롤링: 페이지 로드 → 페이지네이션까지 스크롤 → HTML 파싱 → 제품 데이터 추출
+        - 0개: 리프레쉬 후 재시도 (최대 3회)
+        - 1개 이상: 24개 찾을 때까지 재파싱 (최대 3회)
+        """
         try:
             url = self.url_template.replace('{page}', str(page_number))
 
@@ -145,31 +149,69 @@ class BestBuyMainCrawler(BaseCrawler):
             base_containers = []
             expected_products = 24
 
-            for attempt in range(1, 4):
+            # 0개인 경우 리프레쉬 재시도 (최대 3회) - 페이지 로드 실패 상황
+            for refresh_attempt in range(1, 4):
                 page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
                 base_containers = tree.xpath(base_container_xpath)
 
-                if len(base_containers) >= expected_products:
-                    break
+                if len(base_containers) == 0:
+                    print(f"[WARNING] Page {page_number}: 0 products found, refresh attempt {refresh_attempt}/3")
+                    if refresh_attempt < 3:
+                        self.driver.refresh()
+                        time.sleep(random.uniform(8, 12))
+                    continue
+                break
 
-                if attempt < 3:
-                    time.sleep(random.uniform(8, 12))
+            # 리프레쉬 3회 후에도 0개이면 빈 리스트 반환
+            if len(base_containers) == 0:
+                print(f"[ERROR] Page {page_number}: No products found after 3 refresh attempts")
+                return []
+
+            # 1개 이상 찾은 경우: 스크롤 후 24개 찾을 때까지 재파싱 (최대 3회)
+            if len(base_containers) < expected_products:
+                for scroll_attempt in range(1, 4):
+                    self.scroll_to_bottom()
+                    time.sleep(random.uniform(28, 32))
+                    page_html = self.driver.page_source
+                    tree = html.fromstring(page_html)
+                    base_containers = tree.xpath(base_container_xpath)
+                    if len(base_containers) >= expected_products:
+                        break
+                    if scroll_attempt < 3:
+                        time.sleep(random.uniform(8, 12))
 
             products = []
             for idx, item in enumerate(base_containers, 1):
                 try:
                     product_url_raw = self.safe_extract(item, 'product_url')
-                    product_url = f"https://www.bestbuy.com{product_url_raw}" if product_url_raw and product_url_raw.startswith('/') else product_url_raw
+                    # '#'이나 유효하지 않은 URL은 None으로 처리
+                    if not product_url_raw or product_url_raw == '#':
+                        product_url = None
+                    elif product_url_raw.startswith('/'):
+                        product_url = f"https://www.bestbuy.com{product_url_raw}"
+                    else:
+                        product_url = product_url_raw
+
+                    # savings 추출 후 "Save " 제거
+                    savings_raw = self.safe_extract(item, 'savings')
+                    savings = savings_raw.replace('Save ', '') if savings_raw else None
+
+                    # offer 추출 후 숫자만 추출 ("+ 1 offer for you" → "1")
+                    offer_raw = self.safe_extract(item, 'offer')
+                    offer = None
+                    if offer_raw:
+                        match = re.search(r'\d+', offer_raw)
+                        offer = match.group() if match else offer_raw
 
                     product_data = {
                         'account_name': self.account_name,
                         'page_type': self.page_type,
                         'retailer_sku_name': self.safe_extract(item, 'retailer_sku_name'),
                         'final_sku_price': self.safe_extract(item, 'final_sku_price'),
-                        'savings': self.safe_extract(item, 'savings'),
+                        'savings': savings,
                         'comparable_pricing': self.safe_extract(item, 'comparable_pricing'),
-                        'offer': self.safe_extract(item, 'offer'),
+                        'offer': offer,
                         'pick_up_availability': self.safe_extract(item, 'pick_up_availability'),
                         'shipping_availability': self.safe_extract(item, 'shipping_availability'),
                         'delivery_availability': self.safe_extract(item, 'delivery_availability'),
@@ -199,32 +241,18 @@ class BestBuyMainCrawler(BaseCrawler):
             return []
 
     def save_products(self, products):
-        """DB 저장: 중복 URL 제거 → BATCH_SIZE 배치 → RETRY_SIZE 배치 → 1개씩 (3-tier retry)"""
+        """DB 저장: BATCH_SIZE 배치 → RETRY_SIZE 배치 → 1개씩 (3-tier retry)
+        Note: 중복 URL 필터링은 run()에서 선행 처리됨
+        """
         if not products:
             return 0
 
-        # 중복 URL 필터링 (URL이 없으면 그냥 저장)
-        unique_products = []
-        for product in products:
-            product_url = product.get('product_url')
-            if not product_url:
-                unique_products.append(product)
-            elif product_url not in self.saved_urls:
-                self.saved_urls.add(product_url)
-                unique_products.append(product)
-
-        if not unique_products:
-            print("[INFO] All products filtered (duplicate URLs)")
-            return 0
-
-        # main_rank 재할당 (중복 제거 후 순차적으로)
-        for i, product in enumerate(unique_products):
+        # main_rank 할당 (순차적으로)
+        for i, product in enumerate(products):
             product['main_rank'] = self.current_rank + i + 1
 
         # current_rank 업데이트
-        self.current_rank += len(unique_products)
-
-        products = unique_products
+        self.current_rank += len(products)
 
         try:
             cursor = self.db_conn.cursor()
@@ -332,8 +360,24 @@ class BestBuyMainCrawler(BaseCrawler):
                         break
                     print(f"[ERROR] No products found at page {page_num}")
                 else:
+                    # 중복 URL 필터링 선행 (remaining 계산 전에 수행)
+                    unique_products = []
+                    for product in products:
+                        product_url = product.get('product_url')
+                        if not product_url:
+                            unique_products.append(product)
+                        elif product_url not in self.saved_urls:
+                            self.saved_urls.add(product_url)
+                            unique_products.append(product)
+
+                    if not unique_products:
+                        print(f"[INFO] Page {page_num}: All products filtered (duplicate URLs)")
+                        time.sleep(random.uniform(28, 32))
+                        page_num += 1
+                        continue
+
                     remaining = target_products - total_products
-                    products_to_save = products[:remaining]
+                    products_to_save = unique_products[:remaining]
                     saved_count = self.save_products(products_to_save)
                     total_products += saved_count
 
