@@ -215,7 +215,11 @@ class BestBuyDetailCrawler(BaseCrawler):
                 if original_sku_price:
                     product['original_sku_price'] = original_sku_price
 
-            # ========== 1-3단계: trend인 경우 savings/pick_up/shipping availability 상세페이지에서 추출 ==========
+            # ========== 1-3단계: SKU 추출 ==========
+            sku_raw = self.safe_extract(tree, 'sku')
+            sku = sku_raw.replace('Model:', '').strip() if sku_raw else None
+
+            # ========== 1-4단계: trend인 경우 savings/pick_up/shipping availability 상세페이지에서 추출 ==========
             if product.get('page_type') == 'trend':
                 if not product.get('savings'):
                     savings_raw = self.safe_extract(tree, 'savings')
@@ -508,6 +512,7 @@ class BestBuyDetailCrawler(BaseCrawler):
             combined_data = product.copy()
             combined_data.update({
                 'item': item,
+                'sku': sku,
                 'count_of_reviews': count_of_reviews,
                 'star_rating': star_rating,
                 'count_of_star_ratings': count_of_star_ratings,
@@ -528,10 +533,61 @@ class BestBuyDetailCrawler(BaseCrawler):
             print(f"[ERROR] Detail crawl failed: {e}")
             return product
 
-    def save_to_retail_com(self, products):
-        """DB 저장: 2-tier retry (BATCH_SIZE=5 → 1개씩)"""
-        if not products:
-            return 0
+    def upsert_item_mst(self, product):
+        """hhp_item_mst 테이블에 INSERT 또는 UPDATE
+        - 조회 결과 없음 → INSERT (sku 없어도 빈값으로)
+        - 조회 결과 있음 + 기존 sku null/빈값 + 새 sku 있음 → UPDATE
+        - 조회 결과 있음 + 기존 sku null/빈값 + 새 sku도 없음 → SKIP
+        """
+        item = product.get('item')
+        if not item:
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+            new_sku = product.get('sku') or ''
+            product_url = product.get('product_url')
+
+            # 기존 데이터 조회
+            cursor.execute("""
+                SELECT sku FROM hhp_item_mst
+                WHERE item = %s AND account_name = %s
+            """, (item, self.account_name))
+
+            row = cursor.fetchone()
+
+            if row is None:
+                # 조회 결과 없음 → INSERT
+                cursor.execute("""
+                    INSERT INTO hhp_item_mst (item, account_name, sku, product_url)
+                    VALUES (%s, %s, %s, %s)
+                """, (item, self.account_name, new_sku, product_url))
+                self.db_conn.commit()
+                print(f"  [ITEM_MST] INSERT: {item}, sku: {new_sku or '(empty)'}")
+            else:
+                existing_sku = row[0] or ''
+                if not existing_sku and new_sku:
+                    # 기존 sku 없고 새 sku 있음 → UPDATE (product_url, updated_at도 함께 업데이트)
+                    cursor.execute("""
+                        UPDATE hhp_item_mst SET sku = %s, product_url = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE item = %s AND account_name = %s
+                    """, (new_sku, product_url, item, self.account_name))
+                    self.db_conn.commit()
+                    print(f"  [ITEM_MST] UPDATE: {item}, sku: {new_sku}")
+                elif not existing_sku and not new_sku:
+                    # 둘 다 없음 → SKIP
+                    pass
+
+            cursor.close()
+
+        except Exception as e:
+            print(f"[ERROR] upsert_item_mst failed: {item}: {e}")
+            self.db_conn.rollback()
+
+    def save_to_retail_com(self, product):
+        """DB 저장: 1개씩 INSERT"""
+        if not product:
+            return False
 
         try:
             cursor = self.db_conn.cursor()
@@ -563,60 +619,33 @@ class BestBuyDetailCrawler(BaseCrawler):
                 )
             """
 
-            BATCH_SIZE = 5
-            saved_count = 0
+            values = (
+                'SEA', 'HHP', product.get('item'), self.account_name, product.get('page_type'),
+                product.get('count_of_reviews'), product.get('retailer_sku_name'), product.get('product_url'),
+                product.get('star_rating'), product.get('count_of_star_ratings'), product.get('sku_popularity'),
+                product.get('final_sku_price'), product.get('original_sku_price'), product.get('savings'), product.get('discount_type'),
+                product.get('offer'), product.get('bundle'),
+                product.get('pick_up_availability'), product.get('shipping_availability'), product.get('delivery_availability'),
+                product.get('inventory_status'), product.get('sku_status'),
+                product.get('retailer_membership_discounts'), product.get('trade_in'), product.get('recommendation_intent'),
+                product.get('hhp_storage'), product.get('hhp_color'), product.get('hhp_carrier'),
+                product.get('detailed_review_content'), product.get('summarized_review_content'), product.get('top_mentions'),
+                product.get('retailer_sku_name_similar'),
+                product.get('main_rank'), product.get('bsr_rank'), product.get('trend_rank'),
+                product.get('promotion_type'),
+                product.get('calendar_week'), product.get('crawl_strdatetime'), self.batch_id
+            )
 
-            def product_to_tuple(product):
-                return (
-                    'SEA', 'HHP', product.get('item'), self.account_name, product.get('page_type'),
-                    product.get('count_of_reviews'), product.get('retailer_sku_name'), product.get('product_url'),
-                    product.get('star_rating'), product.get('count_of_star_ratings'), product.get('sku_popularity'),
-                    product.get('final_sku_price'), product.get('original_sku_price'), product.get('savings'), product.get('discount_type'),
-                    product.get('offer'), product.get('bundle'),
-                    product.get('pick_up_availability'), product.get('shipping_availability'), product.get('delivery_availability'),
-                    product.get('inventory_status'), product.get('sku_status'),
-                    product.get('retailer_membership_discounts'), product.get('trade_in'), product.get('recommendation_intent'),
-                    product.get('hhp_storage'), product.get('hhp_color'), product.get('hhp_carrier'),
-                    product.get('detailed_review_content'), product.get('summarized_review_content'), product.get('top_mentions'),
-                    product.get('retailer_sku_name_similar'),
-                    product.get('main_rank'), product.get('bsr_rank'), product.get('trend_rank'),
-                    product.get('promotion_type'),
-                    product.get('calendar_week'), product.get('crawl_strdatetime'), self.batch_id
-                )
-
-            for batch_start in range(0, len(products), BATCH_SIZE):
-                batch_end = min(batch_start + BATCH_SIZE, len(products))
-                batch_products = products[batch_start:batch_end]
-
-                try:
-                    values_list = [product_to_tuple(p) for p in batch_products]
-                    cursor.executemany(insert_query, values_list)
-                    self.db_conn.commit()
-                    saved_count += len(batch_products)
-
-                except Exception:
-                    self.db_conn.rollback()
-
-                    for single_product in batch_products:
-                        try:
-                            cursor.execute(insert_query, product_to_tuple(single_product))
-                            self.db_conn.commit()
-                            saved_count += 1
-                        except Exception as single_error:
-                            print(f"[ERROR] DB save failed: {single_product.get('item')}: {single_error}")
-                            query = cursor.mogrify(insert_query, product_to_tuple(single_product))
-                            print(f"[DEBUG] Query:\n{query.decode('utf-8')}")
-                            traceback.print_exc()
-                            self.db_conn.rollback()
-                            continue
-
+            cursor.execute(insert_query, values)
+            self.db_conn.commit()
             cursor.close()
-            return saved_count
+            return True
 
         except Exception as e:
-            print(f"[ERROR] Failed to save products: {e}")
+            print(f"[ERROR] DB save failed: {product.get('item')}: {e}")
             traceback.print_exc()
-            return 0
+            self.db_conn.rollback()
+            return False
 
     def run(self):
         """실행: initialize() → load_product_list() → 제품별 crawl_detail() → save_to_retail_com() → 리소스 정리"""
@@ -631,8 +660,6 @@ class BestBuyDetailCrawler(BaseCrawler):
                 return False
 
             total_saved = 0
-            crawled_products = []
-            SAVE_BATCH_SIZE = 5
 
             for i, product in enumerate(product_list, 1):
                 try:
@@ -641,22 +668,15 @@ class BestBuyDetailCrawler(BaseCrawler):
 
                     combined_data = self.crawl_detail(product)
                     if combined_data:
-                        crawled_products.append(combined_data)
-
-                    if len(crawled_products) >= SAVE_BATCH_SIZE:
-                        saved_count = self.save_to_retail_com(crawled_products)
-                        total_saved += saved_count
-                        crawled_products = []
+                        self.upsert_item_mst(combined_data)
+                        if self.save_to_retail_com(combined_data):
+                            total_saved += 1
 
                     time.sleep(5)
 
                 except Exception as e:
                     print(f"[ERROR] Product {i} failed: {e}")
                     continue
-
-            if crawled_products:
-                saved_count = self.save_to_retail_com(crawled_products)
-                total_saved += saved_count
 
             table_name = 'test_hhp_retail_com' if self.test_mode else 'hhp_retail_com'
             print(f"[DONE] Processed: {len(product_list)}, Saved: {total_saved}, Table: {table_name}, batch_id: {self.batch_id}")
