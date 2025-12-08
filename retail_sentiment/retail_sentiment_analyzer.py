@@ -367,7 +367,7 @@ class OpenAIClient:
 
             # 에러 시에도 저장 (DRY RUN이 아닐 때만)
             if not dry_run:
-                self.save_request(prompt, None, 'error', batch_id, str(e), None)
+                self.save_request(prompt, None, 'error', batch_id, str(e), None, None)
 
             return {
                 'success': False,
@@ -384,7 +384,7 @@ class OpenAIClient:
 class TVSentimentAnalyzer:
     """TV 제품 리뷰 감성 분석기"""
 
-    def __init__(self, limit=None, dry_run=False, target_date=None, test_mode=False):
+    def __init__(self, limit=None, dry_run=False, target_date=None, test_mode=False, batch_id=None):
         self.limit = limit
         self.dry_run = dry_run
         self.target_date = target_date
@@ -394,8 +394,12 @@ class TVSentimentAnalyzer:
         self.source_table = 'tv_retail_com'
         self.master_table = 'tv_item_mst'
         self.target_table = 'test_tv_retail_sentiment' if test_mode else 'tv_retail_sentiment'
-        prefix = "t_tv" if test_mode else "tv"
-        self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # 외부 batch_id가 없으면 자체 생성
+        if batch_id:
+            self.batch_id = batch_id
+        else:
+            prefix = "t_senti" if test_mode else "senti"
+            self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def setup(self):
         """초기화"""
@@ -406,8 +410,8 @@ class TVSentimentAnalyzer:
             self.openai = OpenAIClient(OPENAI_API_KEY, self.db)
             print_log("INFO", "OpenAI 클라이언트 초기화 완료")
 
-            # 템플릿 로드
-            if not self.openai.load_template('Retail_sentiment'):
+            # 템플릿 로드 (TV 전용)
+            if not self.openai.load_template('TV_retail_sentiment'):
                 return False
 
         except Exception as e:
@@ -499,10 +503,10 @@ class TVSentimentAnalyzer:
             final_interpretation = response_data.get('final_interpretation')
 
             query = f"""
-                INSERT INTO {self.target_table} (retail_com_id, sentiment_score, final_interpretation)
-                VALUES (%s, %s, %s)
+                INSERT INTO {self.target_table} (retail_com_id, sentiment_score, final_interpretation, batch_id, created_at)
+                VALUES (%s, %s, %s, %s, %s)
             """
-            self.db.execute(query, (retail_com_id, str(sentiment_score), final_interpretation))
+            self.db.execute(query, (retail_com_id, str(sentiment_score), final_interpretation, self.batch_id, datetime.now()))
             self.db.commit()
             print_log("INFO", f"  -> 저장 완료 (테이블: {self.target_table})")
         except Exception as e:
@@ -613,7 +617,7 @@ class TVSentimentAnalyzer:
 class HHPSentimentAnalyzer:
     """HHP 제품 리뷰 감성 분석기"""
 
-    def __init__(self, limit=None, dry_run=False, target_date=None, test_mode=False):
+    def __init__(self, limit=None, dry_run=False, target_date=None, test_mode=False, batch_id=None):
         self.limit = limit
         self.dry_run = dry_run
         self.target_date = target_date
@@ -623,8 +627,12 @@ class HHPSentimentAnalyzer:
         self.source_table = 'hhp_retail_com'
         self.master_table = 'hhp_item_mst'
         self.target_table = 'test_hhp_retail_sentiment' if test_mode else 'hhp_retail_sentiment'
-        prefix = "t_hhp" if test_mode else "hhp"
-        self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # 외부 batch_id가 없으면 자체 생성
+        if batch_id:
+            self.batch_id = batch_id
+        else:
+            prefix = "t_senti" if test_mode else "senti"
+            self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def setup(self):
         """초기화"""
@@ -635,8 +643,8 @@ class HHPSentimentAnalyzer:
             self.openai = OpenAIClient(OPENAI_API_KEY, self.db)
             print_log("INFO", "OpenAI 클라이언트 초기화 완료")
 
-            # 템플릿 로드
-            if not self.openai.load_template('Retail_sentiment'):
+            # 템플릿 로드 (HHP 전용)
+            if not self.openai.load_template('HHP_retail_sentiment'):
                 return False
 
         except Exception as e:
@@ -728,10 +736,10 @@ class HHPSentimentAnalyzer:
             final_interpretation = response_data.get('final_interpretation')
 
             query = f"""
-                INSERT INTO {self.target_table} (retail_com_id, sentiment_score, final_interpretation)
-                VALUES (%s, %s, %s)
+                INSERT INTO {self.target_table} (retail_com_id, sentiment_score, final_interpretation, batch_id, created_at)
+                VALUES (%s, %s, %s, %s, %s)
             """
-            self.db.execute(query, (retail_com_id, str(sentiment_score), final_interpretation))
+            self.db.execute(query, (retail_com_id, str(sentiment_score), final_interpretation, self.batch_id, datetime.now()))
             self.db.commit()
             print_log("INFO", f"  -> 저장 완료 (테이블: {self.target_table})")
         except Exception as e:
@@ -865,6 +873,10 @@ if __name__ == "__main__":
         test_count_input = input("  test_count (엔터: 전체): ").strip()
         test_count = int(test_count_input) if test_count_input else None
 
+        # 공통 배치 ID 생성
+        batch_id = f"t_senti_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        print_log("INFO", f"배치 ID: {batch_id}")
+
         # TV 분석
         print("\n" + "=" * 60)
         print("[1/2] TV 감성 분석 시작")
@@ -872,7 +884,8 @@ if __name__ == "__main__":
         tv_analyzer = TVSentimentAnalyzer(
             limit=test_count,
             dry_run=True,
-            target_date=target_date
+            target_date=target_date,
+            batch_id=batch_id
         )
         tv_success, tv_fail = tv_analyzer.run()
 
@@ -883,7 +896,8 @@ if __name__ == "__main__":
         hhp_analyzer = HHPSentimentAnalyzer(
             limit=test_count,
             dry_run=True,
-            target_date=target_date
+            target_date=target_date,
+            batch_id=batch_id
         )
         hhp_success, hhp_fail = hhp_analyzer.run()
 
@@ -891,6 +905,7 @@ if __name__ == "__main__":
         print("\n" + "=" * 60)
         print("전체 분석 완료")
         print("=" * 60)
+        print(f"배치 ID: {batch_id}")
         print(f"TV  - 성공: {tv_success}건, 실패: {tv_fail}건")
         print(f"HHP - 성공: {hhp_success}건, 실패: {hhp_fail}건")
         print(f"총계 - 성공: {tv_success + hhp_success}건, 실패: {tv_fail + hhp_fail}건")
@@ -911,6 +926,10 @@ if __name__ == "__main__":
         test_count_input = input("  test_count (엔터: 전체): ").strip()
         test_count = int(test_count_input) if test_count_input else None
 
+        # 공통 배치 ID 생성
+        batch_id = f"t_senti_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        print_log("INFO", f"배치 ID: {batch_id}")
+
         # TV 분석
         print("\n" + "=" * 60)
         print("[1/2] TV 감성 분석 시작 (테스트)")
@@ -919,7 +938,8 @@ if __name__ == "__main__":
             limit=test_count,
             dry_run=False,
             target_date=target_date,
-            test_mode=True
+            test_mode=True,
+            batch_id=batch_id
         )
         tv_success, tv_fail = tv_analyzer.run()
 
@@ -931,7 +951,8 @@ if __name__ == "__main__":
             limit=test_count,
             dry_run=False,
             target_date=target_date,
-            test_mode=True
+            test_mode=True,
+            batch_id=batch_id
         )
         hhp_success, hhp_fail = hhp_analyzer.run()
 
@@ -939,6 +960,7 @@ if __name__ == "__main__":
         print("\n" + "=" * 60)
         print("전체 분석 완료 (테스트)")
         print("=" * 60)
+        print(f"배치 ID: {batch_id}")
         print(f"TV  - 성공: {tv_success}건, 실패: {tv_fail}건")
         print(f"HHP - 성공: {hhp_success}건, 실패: {hhp_fail}건")
         print(f"총계 - 성공: {tv_success + hhp_success}건, 실패: {tv_fail + hhp_fail}건")
@@ -953,24 +975,29 @@ if __name__ == "__main__":
         print_log("INFO", "운영 모드로 실행합니다.")
         print(f"로그 파일: {log_file}")
 
+        # 공통 배치 ID 생성
+        batch_id = f"senti_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        print_log("INFO", f"배치 ID: {batch_id}")
+
         # TV 분석
         print("\n" + "=" * 60)
         print("[1/2] TV 감성 분석 시작")
         print("=" * 60)
-        tv_analyzer = TVSentimentAnalyzer()
+        tv_analyzer = TVSentimentAnalyzer(batch_id=batch_id)
         tv_success, tv_fail = tv_analyzer.run()
 
         # HHP 분석
         print("\n" + "=" * 60)
         print("[2/2] HHP 감성 분석 시작")
         print("=" * 60)
-        hhp_analyzer = HHPSentimentAnalyzer()
+        hhp_analyzer = HHPSentimentAnalyzer(batch_id=batch_id)
         hhp_success, hhp_fail = hhp_analyzer.run()
 
         # 최종 결과
         print("\n" + "=" * 60)
         print("전체 분석 완료")
         print("=" * 60)
+        print(f"배치 ID: {batch_id}")
         print(f"TV  - 성공: {tv_success}건, 실패: {tv_fail}건")
         print(f"HHP - 성공: {hhp_success}건, 실패: {hhp_fail}건")
         print(f"총계 - 성공: {tv_success + hhp_success}건, 실패: {tv_fail + hhp_fail}건")
