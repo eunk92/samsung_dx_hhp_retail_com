@@ -200,12 +200,43 @@ class DatabaseManager:
 class OpenAIClient:
     """OpenAI API 클라이언트"""
 
-    def __init__(self, api_key):
+    def __init__(self, api_key, db_manager):
         self.client = OpenAI(api_key=api_key)
         self.model = "gpt-4o"
+        self.db = db_manager
+        self.template_id = None
+        self.template = None
+
+    def load_template(self, template_name='Retail_sentiment'):
+        """DB에서 템플릿 조회"""
+        try:
+            query = """
+                SELECT id, question_template
+                FROM openai_question_templates
+                WHERE template_name = %s AND is_active = true
+                LIMIT 1
+            """
+            self.db.execute(query, (template_name,))
+            row = self.db.fetchone()
+
+            if row:
+                self.template_id = row[0]
+                self.template = row[1]
+                print_log("INFO", f"템플릿 로드 완료: {template_name} (id: {self.template_id})")
+                return True
+            else:
+                print_log("ERROR", f"템플릿을 찾을 수 없음: {template_name}")
+                return False
+        except Exception as e:
+            print_log("ERROR", f"템플릿 로드 실패: {e}")
+            return False
 
     def generate_prompt(self, product_data):
-        """프롬프트 생성"""
+        """프롬프트 생성 (DB 템플릿 사용)"""
+        if not self.template:
+            print_log("ERROR", "템플릿이 로드되지 않았습니다.")
+            return None
+
         # 변수 맵핑
         retailer_sku_name = product_data.get('Retailer_SKU_Name', '')
         item = product_data.get('Item', '')
@@ -216,49 +247,77 @@ class OpenAIClient:
         count_of_star_ratings = product_data.get('count_of_star_ratings')
         bsr_rank = product_data.get('bsr_rank')
 
-        prompt = f"""Analyze structured product review data from Retail.com and output a strict JSON object only (no extra text).
-
-Each product (SKU) contains detailed reviews and ranking data.
-
-You must:
-- Infer the overall sentiment toward each product ({retailer_sku_name}, {item}).
-- Use both textual signals ({detailed_review_content}, {top_mentions}) and quantitative indicators ({recommendation_intent}, {star_ratings}, {count_of_star_ratings}, {bsr_rank}).
-- Base your sentiment primarily on review text polarity and intensity, but adjust for quantitative indicators (higher ratings, more reviews, better rank increase positivity).
-- Sentiment scale: -5 (most negative), 0 (neutral), +5 (most positive).
-- If information is missing, set the JSON field to null and explain in `"notes"`.
-- Output **only valid JSON** (no markdown formatting, no additional commentary).
-- Include short evidence snippets and a human-readable comment to justify the sentiment score.
-
-----------------------------------------
-OUTPUT JSON FORMAT (STRICT REQUIREMENT)
-
-The response must be a JSON object with the following structure:
-
-{{{{
-  "product_name": "<Retailer_SKU_Name or Item>",
-  "sentiment_score": <numeric between -5 and +5>,
-  "confidence_level": "<high | medium | low>",
-  "inputs_used": {{{{
-    "star_rating": <numeric or null>,
-    "review_count": <numeric or null>,
-    "recommendation_intent": <numeric % or null>,
-    "bsr_rank": <numeric or null>,
-    "textual_sentiment_summary": "<short polarity interpretation>"
-  }}}},
-  "evidence": {{{{
-    "top_positive_phrases": ["...", "..."],
-    "top_negative_phrases": ["...", "..."],
-    "representative_review_snippet": "..."
-  }}}},
-  "final_interpretation": "<1–2 sentence reasoning combining text and quantitative factors>",
-  "notes": "<state missing data, ambiguity, confidence rationale, or assumptions>"
-}}}}
-"""
+        # 템플릿 변수 치환
+        prompt = self.template.format(
+            retailer_sku_name=retailer_sku_name,
+            item=item,
+            detailed_review_content=detailed_review_content,
+            top_mentions=top_mentions,
+            recommendation_intent=recommendation_intent,
+            star_ratings=star_ratings,
+            count_of_star_ratings=count_of_star_ratings,
+            bsr_rank=bsr_rank
+        )
         return prompt
 
-    def analyze(self, product_data):
+    def calculate_cost(self, prompt_tokens, completion_tokens):
+        """GPT-4o 토큰 비용 계산 (USD)"""
+        # GPT-4o 가격 (2024년 기준)
+        # Input: $2.50 / 1M tokens
+        # Output: $10.00 / 1M tokens
+        input_cost = (prompt_tokens / 1_000_000) * 2.50
+        output_cost = (completion_tokens / 1_000_000) * 10.00
+        return round(input_cost + output_cost, 6)
+
+    def save_request(self, prompt, response_text, status, batch_id, error_message=None, tokens_used=None, cost_usd=None):
+        """market_openai_request 테이블에 요청/응답 저장"""
+        try:
+            query = """
+                INSERT INTO market_openai_request
+                (template_id, question_sent, response_json, status, batch_id,
+                 requested_at, completed_at, error_message, tokens_used, cost_usd)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            requested_at = datetime.now()
+            completed_at = datetime.now() if status in ('success', 'error') else None
+
+            # response_json을 JSON으로 변환
+            response_json = None
+            if response_text:
+                try:
+                    response_json = json.dumps(json.loads(response_text))
+                except json.JSONDecodeError:
+                    response_json = json.dumps({"raw_response": response_text})
+
+            self.db.execute(query, (
+                self.template_id,
+                prompt,
+                response_json,
+                status,
+                batch_id,
+                requested_at,
+                completed_at,
+                error_message,
+                tokens_used,
+                cost_usd
+            ))
+            self.db.commit()
+            print_log("INFO", f"  -> 요청/응답 저장 완료 (market_openai_request)")
+        except Exception as e:
+            print_log("ERROR", f"요청/응답 저장 실패: {e}")
+            self.db.rollback()
+
+    def analyze(self, product_data, batch_id=None, dry_run=False):
         """OpenAI API 호출하여 감성 분석"""
         prompt = self.generate_prompt(product_data)
+
+        if not prompt:
+            return {
+                'success': False,
+                'prompt': None,
+                'response': None,
+                'error': '템플릿 로드 실패'
+            }
 
         try:
             response = self.client.chat.completions.create(
@@ -280,6 +339,10 @@ The response must be a JSON object with the following structure:
 
             response_text = response.choices[0].message.content
             response_time = datetime.now()
+            tokens_used = response.usage.total_tokens if response.usage else 0
+            prompt_tokens = response.usage.prompt_tokens if response.usage else 0
+            completion_tokens = response.usage.completion_tokens if response.usage else 0
+            cost_usd = self.calculate_cost(prompt_tokens, completion_tokens)
 
             # JSON 파싱 검증
             try:
@@ -287,16 +350,25 @@ The response must be a JSON object with the following structure:
             except json.JSONDecodeError:
                 print_log("WARNING", "응답이 유효한 JSON이 아닙니다. 원본 텍스트 저장")
 
+            # 요청/응답 저장 (DRY RUN이 아닐 때만)
+            if not dry_run:
+                self.save_request(prompt, response_text, 'success', batch_id, None, tokens_used, cost_usd)
+
             return {
                 'success': True,
                 'prompt': prompt,
                 'response': response_text,
-                'tokens_used': response.usage.total_tokens if response.usage else 0,
+                'tokens_used': tokens_used,
                 'response_time': response_time
             }
 
         except Exception as e:
             print_log("ERROR", f"OpenAI API 호출 실패: {e}")
+
+            # 에러 시에도 저장 (DRY RUN이 아닐 때만)
+            if not dry_run:
+                self.save_request(prompt, None, 'error', batch_id, str(e), None)
+
             return {
                 'success': False,
                 'prompt': prompt,
@@ -322,6 +394,8 @@ class TVSentimentAnalyzer:
         self.source_table = 'tv_retail_com'
         self.master_table = 'tv_item_mst'
         self.target_table = 'test_tv_retail_sentiment' if test_mode else 'tv_retail_sentiment'
+        prefix = "t_tv" if test_mode else "tv"
+        self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def setup(self):
         """초기화"""
@@ -329,8 +403,13 @@ class TVSentimentAnalyzer:
             return False
 
         try:
-            self.openai = OpenAIClient(OPENAI_API_KEY)
+            self.openai = OpenAIClient(OPENAI_API_KEY, self.db)
             print_log("INFO", "OpenAI 클라이언트 초기화 완료")
+
+            # 템플릿 로드
+            if not self.openai.load_template('Retail_sentiment'):
+                return False
+
         except Exception as e:
             print_log("ERROR", f"OpenAI 클라이언트 초기화 실패: {e}")
             return False
@@ -436,7 +515,7 @@ class TVSentimentAnalyzer:
             sku_name = product_data.get('Retailer_SKU_Name', 'Unknown')
             print_log("INFO", f"분석 중: {sku_name[:50]}...")
 
-            result = self.openai.analyze(product_data)
+            result = self.openai.analyze(product_data, batch_id=self.batch_id, dry_run=self.dry_run)
 
             if result['success']:
                 print_log("INFO", f"  -> 분석 완료 (토큰: {result['tokens_used']})")
@@ -472,6 +551,7 @@ class TVSentimentAnalyzer:
         print_log("INFO", f"[TV] Sentiment Analyzer 시작{dry_run_str}{test_mode_str}")
         print_log("INFO", f"[TV] 소스 테이블: {self.source_table}")
         print_log("INFO", f"[TV] 저장 테이블: {self.target_table}")
+        print_log("INFO", f"[TV] batch_id: {self.batch_id}")
         print_log("INFO", f"{'=' * 60}")
 
         try:
@@ -543,6 +623,8 @@ class HHPSentimentAnalyzer:
         self.source_table = 'hhp_retail_com'
         self.master_table = 'hhp_item_mst'
         self.target_table = 'test_hhp_retail_sentiment' if test_mode else 'hhp_retail_sentiment'
+        prefix = "t_hhp" if test_mode else "hhp"
+        self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def setup(self):
         """초기화"""
@@ -550,8 +632,13 @@ class HHPSentimentAnalyzer:
             return False
 
         try:
-            self.openai = OpenAIClient(OPENAI_API_KEY)
+            self.openai = OpenAIClient(OPENAI_API_KEY, self.db)
             print_log("INFO", "OpenAI 클라이언트 초기화 완료")
+
+            # 템플릿 로드
+            if not self.openai.load_template('Retail_sentiment'):
+                return False
+
         except Exception as e:
             print_log("ERROR", f"OpenAI 클라이언트 초기화 실패: {e}")
             return False
@@ -657,7 +744,7 @@ class HHPSentimentAnalyzer:
             sku_name = product_data.get('Retailer_SKU_Name', 'Unknown')
             print_log("INFO", f"분석 중: {sku_name[:50]}...")
 
-            result = self.openai.analyze(product_data)
+            result = self.openai.analyze(product_data, batch_id=self.batch_id, dry_run=self.dry_run)
 
             if result['success']:
                 print_log("INFO", f"  -> 분석 완료 (토큰: {result['tokens_used']})")
@@ -693,6 +780,7 @@ class HHPSentimentAnalyzer:
         print_log("INFO", f"[HHP] Sentiment Analyzer 시작{dry_run_str}{test_mode_str}")
         print_log("INFO", f"[HHP] 소스 테이블: {self.source_table}")
         print_log("INFO", f"[HHP] 저장 테이블: {self.target_table}")
+        print_log("INFO", f"[HHP] batch_id: {self.batch_id}")
         print_log("INFO", f"{'=' * 60}")
 
         try:
