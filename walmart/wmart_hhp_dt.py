@@ -116,8 +116,11 @@ class WalmartDetailCrawler(BaseCrawler):
 
                 # Save screenshot for debugging
                 try:
-                    self.driver.save_screenshot(f"captcha_screen_{int(time.time())}.png")
-                    print("[INFO] Screenshot saved for debugging")
+                    capture_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'capture')
+                    os.makedirs(capture_dir, exist_ok=True)
+                    screenshot_path = os.path.join(capture_dir, f"captcha_screen_{int(time.time())}.png")
+                    self.driver.save_screenshot(screenshot_path)
+                    print(f"[INFO] Screenshot saved: {screenshot_path}")
                 except:
                     pass
 
@@ -292,8 +295,8 @@ class WalmartDetailCrawler(BaseCrawler):
         try:
             print("[INFO] 세션 초기화 중...")
 
-            # 1단계: Walmart 메인 페이지 방문 (쿠키/세션 생성)
-            print("[INFO] Step 1/2: Walmart 메인 페이지 방문...")
+            # Walmart 메인 페이지 방문 (쿠키/세션 생성)
+            print("[INFO] Walmart 메인 페이지 방문...")
             self.driver.get('https://www.walmart.com')
             time.sleep(random.uniform(8, 12))
 
@@ -570,6 +573,7 @@ class WalmartDetailCrawler(BaseCrawler):
             hhp_carrier = None
             hhp_storage = None
             hhp_color = None
+            sku = None
 
             try:
                 spec_button_xpath = self.xpaths.get('spec_button', {}).get('xpath')
@@ -625,6 +629,7 @@ class WalmartDetailCrawler(BaseCrawler):
                         hhp_carrier = self.safe_extract(modal_tree, 'hhp_carrier')
                         hhp_storage = self.safe_extract(modal_tree, 'hhp_storage')
                         hhp_color = self.safe_extract(modal_tree, 'hhp_color')
+                        sku = self.safe_extract(modal_tree, 'sku')
 
                         if spec_close_button_xpath:
                             try:
@@ -869,6 +874,7 @@ class WalmartDetailCrawler(BaseCrawler):
             combined_data = product.copy()
             combined_data.update({
                 'item': item,
+                'sku': sku,
                 'count_of_reviews': count_of_reviews,
                 'star_rating': star_rating,
                 'count_of_star_ratings': count_of_star_ratings,
@@ -893,10 +899,61 @@ class WalmartDetailCrawler(BaseCrawler):
             traceback.print_exc()
             return product
 
-    def save_to_retail_com(self, products):
-        """DB 저장: RETRY_SIZE 배치 → 1개씩 (2-tier retry)"""
-        if not products:
-            return 0
+    def upsert_item_mst(self, product):
+        """hhp_item_mst 테이블에 INSERT 또는 UPDATE
+        - 조회 결과 없음 → INSERT (sku 없어도 빈값으로)
+        - 조회 결과 있음 + 기존 sku null/빈값 + 새 sku 있음 → UPDATE
+        - 조회 결과 있음 + 기존 sku null/빈값 + 새 sku도 없음 → SKIP
+        """
+        item = product.get('item')
+        if not item:
+            return
+
+        try:
+            cursor = self.db_conn.cursor()
+            new_sku = product.get('sku') or ''
+            product_url = product.get('product_url')
+
+            # 기존 데이터 조회
+            cursor.execute("""
+                SELECT sku FROM hhp_item_mst
+                WHERE item = %s AND account_name = %s
+            """, (item, self.account_name))
+
+            row = cursor.fetchone()
+
+            if row is None:
+                # 조회 결과 없음 → INSERT
+                cursor.execute("""
+                    INSERT INTO hhp_item_mst (item, account_name, sku, product_url)
+                    VALUES (%s, %s, %s, %s)
+                """, (item, self.account_name, new_sku, product_url))
+                self.db_conn.commit()
+                print(f"  [ITEM_MST] INSERT: {item}, sku: {new_sku or '(empty)'}")
+            else:
+                existing_sku = row[0] or ''
+                if not existing_sku and new_sku:
+                    # 기존 sku 없고 새 sku 있음 → UPDATE (product_url, updated_at도 함께 업데이트)
+                    cursor.execute("""
+                        UPDATE hhp_item_mst SET sku = %s, product_url = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE item = %s AND account_name = %s
+                    """, (new_sku, product_url, item, self.account_name))
+                    self.db_conn.commit()
+                    print(f"  [ITEM_MST] UPDATE: {item}, sku: {new_sku}")
+                elif not existing_sku and not new_sku:
+                    # 둘 다 없음 → SKIP
+                    pass
+
+            cursor.close()
+
+        except Exception as e:
+            print(f"[ERROR] upsert_item_mst failed: {item}: {e}")
+            self.db_conn.rollback()
+
+    def save_to_retail_com(self, product):
+        """DB 저장: 1개씩 INSERT"""
+        if not product:
+            return False
 
         try:
             cursor = self.db_conn.cursor()
@@ -926,71 +983,42 @@ class WalmartDetailCrawler(BaseCrawler):
                 )
             """
 
-            RETRY_SIZE = 5
-            total_saved = 0
+            values = (
+                'SEA', 'HHP', product.get('item'),
+                self.account_name, product.get('page_type'),
+                product.get('count_of_reviews'), product.get('retailer_sku_name'),
+                product.get('product_url'), product.get('star_rating'),
+                product.get('count_of_star_ratings'),
+                product.get('number_of_ppl_purchased_yesterday'),
+                product.get('number_of_ppl_added_to_carts'),
+                product.get('sku_popularity'), product.get('savings'),
+                product.get('discount_type'), product.get('final_sku_price'),
+                product.get('original_sku_price'), product.get('offer'),
+                product.get('pick_up_availability'),
+                product.get('shipping_availability'),
+                product.get('delivery_availability'),
+                product.get('shipping_info'),
+                product.get('available_quantity_for_purchase'),
+                product.get('inventory_status'), product.get('sku_status'),
+                product.get('retailer_membership_discounts'),
+                product.get('hhp_storage'), product.get('hhp_color'),
+                product.get('hhp_carrier'),
+                product.get('retailer_sku_name_similar'),
+                product.get('detailed_review_content'),
+                product.get('main_rank'), product.get('bsr_rank'),
+                product.get('calendar_week'), product.get('crawl_strdatetime'), self.batch_id
+            )
 
-            def product_to_tuple(product):
-                return (
-                    'SEA', 'HHP', product.get('item'),
-                    self.account_name, product.get('page_type'),
-                    product.get('count_of_reviews'), product.get('retailer_sku_name'),
-                    product.get('product_url'), product.get('star_rating'),
-                    product.get('count_of_star_ratings'),
-                    product.get('number_of_ppl_purchased_yesterday'),
-                    product.get('number_of_ppl_added_to_carts'),
-                    product.get('sku_popularity'), product.get('savings'),
-                    product.get('discount_type'), product.get('final_sku_price'),
-                    product.get('original_sku_price'), product.get('offer'),
-                    product.get('pick_up_availability'),
-                    product.get('shipping_availability'),
-                    product.get('delivery_availability'),
-                    product.get('shipping_info'),
-                    product.get('available_quantity_for_purchase'),
-                    product.get('inventory_status'), product.get('sku_status'),
-                    product.get('retailer_membership_discounts'),
-                    product.get('hhp_storage'), product.get('hhp_color'),
-                    product.get('hhp_carrier'),
-                    product.get('retailer_sku_name_similar'),
-                    product.get('detailed_review_content'),
-                    product.get('main_rank'), product.get('bsr_rank'),
-                    product.get('calendar_week'), product.get('crawl_strdatetime'), self.batch_id
-                )
-
-            def save_batch(batch_products):
-                values_list = [product_to_tuple(p) for p in batch_products]
-                cursor.executemany(insert_query, values_list)
-                self.db_conn.commit()
-                return len(batch_products)
-
-            for batch_start in range(0, len(products), RETRY_SIZE):
-                batch_end = min(batch_start + RETRY_SIZE, len(products))
-                batch_products = products[batch_start:batch_end]
-
-                try:
-                    total_saved += save_batch(batch_products)
-
-                except Exception:
-                    self.db_conn.rollback()
-
-                    for single_product in batch_products:
-                        try:
-                            cursor.execute(insert_query, product_to_tuple(single_product))
-                            self.db_conn.commit()
-                            total_saved += 1
-                        except Exception as single_error:
-                            print(f"[ERROR] DB save failed: {(single_product.get('retailer_sku_name') or 'N/A')[:30]}: {single_error}")
-                            query = cursor.mogrify(insert_query, product_to_tuple(single_product))
-                            print(f"[DEBUG] Query:\n{query.decode('utf-8')}")
-                            traceback.print_exc()
-                            self.db_conn.rollback()
-
+            cursor.execute(insert_query, values)
+            self.db_conn.commit()
             cursor.close()
-            return total_saved
+            return True
 
         except Exception as e:
-            print(f"[ERROR] Failed to save products: {e}")
+            print(f"[ERROR] DB save failed: {product.get('item')}: {e}")
             traceback.print_exc()
-            return 0
+            self.db_conn.rollback()
+            return False
 
     def run(self):
         """실행: initialize() → 제품별 crawl_detail() → save_to_retail_com() → 리소스 정리"""
@@ -1017,8 +1045,9 @@ class WalmartDetailCrawler(BaseCrawler):
                     combined_data = self.crawl_detail(product, first_product=first_product)
 
                     if combined_data:
-                        saved_count = self.save_to_retail_com([combined_data])
-                        total_saved += saved_count
+                        self.upsert_item_mst(combined_data)
+                        if self.save_to_retail_com(combined_data):
+                            total_saved += 1
 
                     time.sleep(random.uniform(2, 3))  # 제품 간 대기
 
