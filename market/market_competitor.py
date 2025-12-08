@@ -250,88 +250,33 @@ class DatabaseManager:
         self.execute(query, params if params else None)
         return self.fetchall()
 
-    def save_analysis_result(self, samsung_product, comp_brand, comp_sku_name, expected_release, comment, calendar_week):
-        """분석 결과 저장
-
-        Args:
-            samsung_product: 삼성 제품명 (samsung_series_name)
-            comp_brand: 경쟁사 브랜드
-            comp_sku_name: 경쟁사 제품명
-            expected_release: 예상 출시일
-            comment: 코멘트
-            calendar_week: 캘린더 주차 (예: w49)
-        """
-        query = f"""
-            INSERT INTO {self.table_name} (
-                country, samsung_series_name, comp_brand, comp_series_name,
-                expected_release, comment, calender_week
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
-        return self.execute(query, (
-            'North America', samsung_product, comp_brand, comp_sku_name,
-            expected_release, comment, calendar_week
-        ))
-
-    def save_batch_with_retry(self, results, calendar_week):
-        """배치 단위로 저장 (20 → 5 → 1 재시도)"""
+    def save_single_result(self, result, calendar_week, batch_id=None):
+        """단일 결과 즉시 저장"""
         insert_query = f"""
             INSERT INTO {self.table_name} (
                 country, samsung_series_name, comp_brand, comp_series_name,
-                expected_release, comment, calender_week, created_at
+                expected_release, comment, calender_week, created_at, batch_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
-
-        def result_to_tuple(r):
-            return (
-                'North America', r['samsung_product'], r['comp_brand'], r['comp_sku_name'],
-                r.get('expected_release', ''), r.get('comment', ''), calendar_week,
-                r.get('created_at')
-            )
-
-        total_success = 0
-        total_fail = 0
-        BATCH_SIZE = 20
-        SUB_BATCH_SIZE = 5
-
-        for batch_start in range(0, len(results), BATCH_SIZE):
-            batch = results[batch_start:batch_start + BATCH_SIZE]
-
-            # 1차: 20개 배치 저장
-            try:
-                values_list = [result_to_tuple(r) for r in batch]
-                self.cursor.executemany(insert_query, values_list)
-                self.commit()
-                total_success += len(batch)
-                continue
-            except Exception:
-                self.rollback()
-
-            # 2차: 5개씩 분할 저장
-            for sub_start in range(0, len(batch), SUB_BATCH_SIZE):
-                sub_batch = batch[sub_start:sub_start + SUB_BATCH_SIZE]
-
-                try:
-                    values_list = [result_to_tuple(r) for r in sub_batch]
-                    self.cursor.executemany(insert_query, values_list)
-                    self.commit()
-                    total_success += len(sub_batch)
-                except Exception:
-                    self.rollback()
-
-                    # 3차: 1개씩 개별 저장
-                    for result in sub_batch:
-                        try:
-                            self.cursor.execute(insert_query, result_to_tuple(result))
-                            self.commit()
-                            total_success += 1
-                        except Exception as e:
-                            print_log("ERROR", f"저장 실패: {result['samsung_product']} vs {result['comp_brand']}: {e}")
-                            self.rollback()
-                            total_fail += 1
-
-        return total_success, total_fail
+        try:
+            self.cursor.execute(insert_query, (
+                'North America',
+                result['samsung_product'],
+                result['comp_brand'],
+                result['comp_sku_name'],
+                result.get('expected_release', ''),
+                result.get('comment', ''),
+                calendar_week,
+                result.get('created_at'),
+                batch_id
+            ))
+            self.commit()
+            return True
+        except Exception as e:
+            print_log("ERROR", f"저장 실패: {result['samsung_product']} vs {result['comp_brand']}: {e}")
+            self.rollback()
+            return False
 
 
 # ============================================================================
@@ -341,60 +286,107 @@ class DatabaseManager:
 class OpenAIClient:
     """OpenAI API 클라이언트"""
 
-    def __init__(self, api_key):
+    def __init__(self, api_key, db_manager):
         self.client = OpenAI(api_key=api_key)
-        self.model = "gpt-4o"  # 또는 "gpt-4-turbo", "gpt-3.5-turbo"
+        self.model = "gpt-4o"
+        self.db = db_manager
+        self.template_id = None
+        self.template = None
+
+    def load_template(self, template_name):
+        """DB에서 템플릿 조회"""
+        try:
+            query = """
+                SELECT id, question_template
+                FROM openai_question_templates
+                WHERE template_name = %s AND is_active = true
+                LIMIT 1
+            """
+            self.db.execute(query, (template_name,))
+            row = self.db.fetchone()
+
+            if row:
+                self.template_id = row[0]
+                self.template = row[1]
+                print_log("INFO", f"템플릿 로드 완료: {template_name} (id: {self.template_id})")
+                return True
+            else:
+                print_log("ERROR", f"템플릿을 찾을 수 없음: {template_name}")
+                return False
+        except Exception as e:
+            print_log("ERROR", f"템플릿 로드 실패: {e}")
+            return False
+
+    def calculate_cost(self, prompt_tokens, completion_tokens):
+        """GPT-4o 토큰 비용 계산 (USD)"""
+        input_cost = (prompt_tokens / 1_000_000) * 2.50
+        output_cost = (completion_tokens / 1_000_000) * 10.00
+        return round(input_cost + output_cost, 6)
+
+    def save_request(self, prompt, response_text, status, batch_id, error_message=None, tokens_used=None, cost_usd=None):
+        """market_openai_request 테이블에 요청/응답 저장"""
+        try:
+            query = """
+                INSERT INTO market_openai_request
+                (template_id, question_sent, response_json, status, batch_id,
+                 requested_at, completed_at, error_message, tokens_used, cost_usd)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            requested_at = datetime.now()
+            completed_at = datetime.now() if status in ('success', 'error') else None
+
+            response_json = None
+            if response_text:
+                try:
+                    response_json = json.dumps(json.loads(response_text))
+                except json.JSONDecodeError:
+                    response_json = json.dumps({"raw_response": response_text})
+
+            self.db.execute(query, (
+                self.template_id,
+                prompt,
+                response_json,
+                status,
+                batch_id,
+                requested_at,
+                completed_at,
+                error_message,
+                tokens_used,
+                cost_usd
+            ))
+            self.db.commit()
+            print_log("INFO", f"  -> 요청/응답 저장 완료 (market_openai_request)")
+        except Exception as e:
+            print_log("ERROR", f"요청/응답 저장 실패: {e}")
+            self.db.rollback()
 
     def generate_prompt(self, category, samsung_product, competitor_brands):
-        """프롬프트 생성 (Samsung 제품 1개 vs 경쟁사 N개)"""
+        """프롬프트 생성 (DB 템플릿 사용)"""
+        if not self.template:
+            print_log("ERROR", "템플릿이 로드되지 않았습니다.")
+            return None
+
         today_date = datetime.now().strftime('%Y-%m-%d')
 
-        prompt = f"""Today is {today_date}. Do NOT assume any other date. Use only the provided date.
-
-You are given:
-• A list of our upcoming {category} products: {samsung_product}
-• A list of competitor brands to analyze: {competitor_brands}
-
-Rules you MUST follow:
-1. Consider only products from the competitor brands provided in the input.
-2. Include only upcoming, unreleased, leaked, rumored, expected, or officially announced future models in North America.
-3. Exclude all products that are already released as of the provided "Today is {today_date}" date.
-4. If the competitor product name is not known or cannot be verified, return:
-   • "comp_sku_name": "info_not_available"
-5. Do NOT invent or create new product names.
-6. For each competitor model, label its release_status as:
-   • "announced", "expected", "leaked", "rumored", "info_not_available"
-7. Provide a short explanation ("comment") describing why this competitor model is relevant.
-8. Present results in the following JSON structure:
-
-{{
-  "analysis_date": "{today_date}",
-  "samsung_product": "{samsung_product}",
-  "category": "{category}",
-  "competitor_analysis": [
-    {{
-      "brand": "<competitor brand>",
-      "comp_sku_name": "<competitor product name or info_not_available>",
-      "release_status": "<announced|expected|leaked|rumored|info_not_available>",
-      "expected_release": "<expected release date or quarter, e.g., Q1 2025>",
-      "comment": "<short explanation of relevance>"
-    }}
-  ]
-}}
-
-If no competitor products are found, return:
-{{
-  "analysis_date": "{today_date}",
-  "samsung_product": "{samsung_product}",
-  "category": "{category}",
-  "competitor_analysis": []
-}}
-"""
+        prompt = self.template.format(
+            today_date=today_date,
+            category=category,
+            samsung_product=samsung_product,
+            competitor_brands=competitor_brands
+        )
         return prompt
 
-    def analyze(self, category, samsung_product, competitor_brands):
+    def analyze(self, category, samsung_product, competitor_brands, batch_id=None, dry_run=False):
         """OpenAI API 호출하여 경쟁제품 분석 (Samsung 1개 vs 경쟁사 N개)"""
         prompt = self.generate_prompt(category, samsung_product, competitor_brands)
+
+        if not prompt:
+            return {
+                'success': False,
+                'prompt': None,
+                'response': None,
+                'error': '템플릿 로드 실패'
+            }
 
         try:
             response = self.client.chat.completions.create(
@@ -415,7 +407,11 @@ If no competitor products are found, return:
             )
 
             response_text = response.choices[0].message.content
-            response_time = datetime.now()  # 응답 받은 시점
+            response_time = datetime.now()
+            tokens_used = response.usage.total_tokens if response.usage else 0
+            prompt_tokens = response.usage.prompt_tokens if response.usage else 0
+            completion_tokens = response.usage.completion_tokens if response.usage else 0
+            cost_usd = self.calculate_cost(prompt_tokens, completion_tokens)
 
             # JSON 파싱 검증
             try:
@@ -423,16 +419,25 @@ If no competitor products are found, return:
             except json.JSONDecodeError:
                 print_log("WARNING", "응답이 유효한 JSON이 아닙니다. 원본 텍스트 저장")
 
+            # 요청/응답 저장 (DRY RUN이 아닐 때만)
+            if not dry_run:
+                self.save_request(prompt, response_text, 'success', batch_id, None, tokens_used, cost_usd)
+
             return {
                 'success': True,
                 'prompt': prompt,
                 'response': response_text,
-                'tokens_used': response.usage.total_tokens if response.usage else 0,
+                'tokens_used': tokens_used,
                 'response_time': response_time
             }
 
         except Exception as e:
             print_log("ERROR", f"OpenAI API 호출 실패: {e}")
+
+            # 에러 시에도 저장 (DRY RUN이 아닐 때만)
+            if not dry_run:
+                self.save_request(prompt, None, 'error', batch_id, str(e), None, None)
+
             return {
                 'success': False,
                 'prompt': prompt,
@@ -448,13 +453,19 @@ If no competitor products are found, return:
 class CompetitorAnalyzer:
     """경쟁제품 분석기"""
 
-    def __init__(self, test_mode=False, test_product_line=None, test_count=None, dry_run=False):
+    def __init__(self, test_mode=False, test_product_line=None, test_count=None, dry_run=False, batch_id=None):
         self.test_mode = test_mode
         self.test_product_line = test_product_line
         self.test_count = test_count
         self.dry_run = dry_run
         self.db = DatabaseManager(test_mode=test_mode)
         self.openai = None
+        # 외부 batch_id가 없으면 자체 생성
+        if batch_id:
+            self.batch_id = batch_id
+        else:
+            prefix = "t_comp" if test_mode else "comp"
+            self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def setup(self):
         """초기화"""
@@ -463,8 +474,13 @@ class CompetitorAnalyzer:
 
         # OpenAI 클라이언트 초기화
         try:
-            self.openai = OpenAIClient(OPENAI_API_KEY)
+            self.openai = OpenAIClient(OPENAI_API_KEY, self.db)
             print_log("INFO", "OpenAI 클라이언트 초기화 완료")
+
+            # 템플릿 로드
+            if not self.openai.load_template('Market_comp_product'):
+                return False
+
         except Exception as e:
             print_log("ERROR", f"OpenAI 클라이언트 초기화 실패: {e}")
             return False
@@ -498,7 +514,7 @@ class CompetitorAnalyzer:
         try:
             print_log("INFO", f"분석 중: {samsung_product} vs [{competitor_brands_str}]")
 
-            result = self.openai.analyze(product_line, samsung_product, competitor_brands_str)
+            result = self.openai.analyze(product_line, samsung_product, competitor_brands_str, batch_id=self.batch_id, dry_run=self.dry_run)
 
             if result['success']:
                 print_log("INFO", f"  -> 분석 완료 (토큰: {result['tokens_used']})")
@@ -587,10 +603,8 @@ class CompetitorAnalyzer:
             tuple: (success_count, fail_count, comp_products_list)
                    comp_products_list는 dry_run일 때만 반환 (이벤트 분석용)
         """
-        BATCH_SIZE = 10
         total_success = 0
         total_fail = 0
-        analysis_results = []
         dry_run_products = []  # DRY RUN용 제품 목록 (brand, product_name) 튜플
 
         # 카테고리별 Samsung 제품 그룹화
@@ -657,28 +671,18 @@ class CompetitorAnalyzer:
                     print_log("INFO", f"=" * 50)
                     total_success += success_count
                 else:
-                    # 성공한 결과만 저장 대상에 추가
+                    # 성공한 결과 즉시 저장
                     for r in results:
                         if r['success']:
-                            analysis_results.append(r)
+                            if self.db.save_single_result(r, calendar_week, self.batch_id):
+                                total_success += 1
+                            else:
+                                total_fail += 1
 
                 total_fail += fail_count
 
-                # dry_run이 아닐 때만 배치 저장
-                if not dry_run and len(analysis_results) >= BATCH_SIZE:
-                    success, fail = self.save_batch(analysis_results, calendar_week)
-                    total_success += success
-                    total_fail += fail
-                    analysis_results = []
-
                 # API 요청 간격 (Rate limit 방지)
                 time.sleep(1)
-
-        # dry_run이 아닐 때만 남은 결과 저장
-        if not dry_run and analysis_results:
-            success, fail = self.save_batch(analysis_results, calendar_week)
-            total_success += success
-            total_fail += fail
 
         # DRY RUN일 때는 제품 목록도 반환 (중복 제거 - 튜플이므로 set 사용 가능)
         if dry_run:
@@ -687,18 +691,14 @@ class CompetitorAnalyzer:
 
         return total_success, total_fail, None
 
-    def save_batch(self, results, calendar_week):
-        """배치 저장"""
-        print_log("INFO", f"배치 저장 ({len(results)}건)")
-        return self.db.save_batch_with_retry(results, calendar_week)
-
     def print_summary(self, success_count, fail_count, total_count):
         """결과 요약 출력"""
         mode_str = "테스트 모드" if self.test_mode else "운영 모드"
         print("\n" + "=" * 60)
-        print("분석 완료")
+        print("경쟁제품 분석 완료")
         print("=" * 60)
         print(f"모드: {mode_str}")
+        print(f"배치 ID: {self.batch_id}")
         print(f"테이블: {self.db.table_name}")
         print(f"성공: {success_count}건")
         print(f"실패: {fail_count}건")
@@ -714,6 +714,7 @@ class CompetitorAnalyzer:
 
         print("\n" + "=" * 60)
         print(f"Market Competitor Analyzer ({mode_str}){dry_run_str}")
+        print(f"배치 ID: {self.batch_id}")
         print(f"저장 테이블: {self.db.table_name}")
         if self.dry_run:
             print("*** DRY RUN 모드: OpenAI 응답만 로그에 출력, DB 저장 안함 ***")
@@ -789,13 +790,22 @@ class CompetitorAnalyzer:
 class EventDateAnalyzer:
     """경쟁제품 이벤트 날짜 분석기"""
 
-    def __init__(self, test_mode=False, limit=None, dry_run=False):
+    def __init__(self, test_mode=False, limit=None, dry_run=False, source_batch_id=None, batch_id=None):
         self.test_mode = test_mode
         self.limit = limit
         self.dry_run = dry_run
+        self.source_batch_id = source_batch_id  # CompetitorAnalyzer의 batch_id (DB 조회용)
         self.db = DatabaseManager(test_mode=test_mode)
         self.openai = None
         self.event_table_name = 'test_market_comp_event' if test_mode else 'market_comp_event'
+        self.template_id = None
+        self.template = None
+        # 외부 batch_id가 없으면 자체 생성
+        if batch_id:
+            self.batch_id = batch_id
+        else:
+            prefix = "t_comp" if test_mode else "comp"
+            self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def setup(self):
         """초기화"""
@@ -803,8 +813,13 @@ class EventDateAnalyzer:
             return False
 
         try:
-            self.openai = OpenAIClient(OPENAI_API_KEY)
+            self.openai = OpenAIClient(OPENAI_API_KEY, self.db)
             print_log("INFO", "OpenAI 클라이언트 초기화 완료")
+
+            # 템플릿 로드
+            if not self.openai.load_template('Market_comp_event'):
+                return False
+
         except Exception as e:
             print_log("ERROR", f"OpenAI 클라이언트 초기화 실패: {e}")
             return False
@@ -824,40 +839,38 @@ class EventDateAnalyzer:
               AND comp_series_name != ''
               AND comp_series_name != 'info_not_available'
         """
+        params = []
+
+        # source_batch_id가 있으면 해당 배치 결과만 조회
+        if self.source_batch_id:
+            query += " AND batch_id = %s"
+            params.append(self.source_batch_id)
+
         if self.limit:
             query += f" LIMIT {self.limit}"
 
-        self.db.execute(query)
+        self.db.execute(query, params if params else None)
         return [(row[0], row[1]) for row in self.db.fetchall()]
 
     def generate_event_prompt(self, product_name):
-        """이벤트 날짜 분석 프롬프트 생성"""
-        prompt = f"""Product name: {product_name}
-Use the product name above to retrieve only publicly confirmed launch and pre-order information, specifically for North America.
-Do NOT use global dates unless they were officially confirmed for North America.
+        """이벤트 날짜 분석 프롬프트 생성 (DB 템플릿 사용)"""
+        if not self.openai.template:
+            print_log("ERROR", "템플릿이 로드되지 않았습니다.")
+            return None
 
-Your task is to retrieve factual information about the product's launch schedule and pre-order details
-ONLY if such information is publicly known, verifiable, and relevant to the North American market.
-
-For the given product name, extract the following:
-- "comp_sku_name": Exact product name provided in the input.
-- "comp_launch_date": The official public release or launch date in North America (YYYY-MM-DD)
-- "comp_preorder": yes/no depending on whether the product had a pre-order phase in North America.
-- "comp_pre_order_start_date": Official North America pre-order start date (YYYY-MM-DD).
-- "comp_preorder_end_date": Official North America pre-order end date (YYYY-MM-DD).
-
-### STRICT RULES YOU MUST FOLLOW:
-1. Use only publicly known and verifiable information for the North American market.
-2. If information is not confirmed for North America, return null.
-3. Do NOT guess, infer, invent, or assume release or pre-order dates.
-4. If the product has only rumors but no official NA dates, return null for dates.
-5. If multiple regional release dates exist, return only the earliest confirmed North America date.
-6. Output strictly in the following JSON format"""
+        prompt = self.openai.template.format(product_name=product_name)
         return prompt
 
     def analyze_event(self, product_name):
         """OpenAI API 호출하여 이벤트 날짜 분석"""
         prompt = self.generate_event_prompt(product_name)
+
+        if not prompt:
+            return {
+                'success': False,
+                'response': None,
+                'error': '템플릿 로드 실패'
+            }
 
         try:
             response = self.openai.client.chat.completions.create(
@@ -879,18 +892,33 @@ For the given product name, extract the following:
 
             response_text = response.choices[0].message.content
             response_time = datetime.now()
+            tokens_used = response.usage.total_tokens if response.usage else 0
+            prompt_tokens = response.usage.prompt_tokens if response.usage else 0
+            completion_tokens = response.usage.completion_tokens if response.usage else 0
+            cost_usd = self.openai.calculate_cost(prompt_tokens, completion_tokens)
+
+            # 요청/응답 저장 (DRY RUN이 아닐 때만)
+            if not self.dry_run:
+                self.openai.save_request(prompt, response_text, 'success', self.batch_id, None, tokens_used, cost_usd)
 
             return {
                 'success': True,
+                'prompt': prompt,
                 'response': response_text,
-                'tokens_used': response.usage.total_tokens if response.usage else 0,
+                'tokens_used': tokens_used,
                 'response_time': response_time
             }
 
         except Exception as e:
             print_log("ERROR", f"OpenAI API 호출 실패: {e}")
+
+            # 에러 시에도 저장 (DRY RUN이 아닐 때만)
+            if not self.dry_run:
+                self.openai.save_request(prompt, None, 'error', self.batch_id, str(e), None, None)
+
             return {
                 'success': False,
+                'prompt': prompt,
                 'response': None,
                 'error': str(e)
             }
@@ -901,9 +929,9 @@ For the given product name, extract the following:
             INSERT INTO {self.event_table_name} (
                 country, comp_brand, comp_sku_name, comp_launch_date, comp_preorder,
                 comp_pre_order_start_date, comp_preorder_end_date,
-                calender_week, created_at
+                calender_week, created_at, batch_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         try:
             self.db.cursor.execute(insert_query, (
@@ -915,7 +943,8 @@ For the given product name, extract the following:
                 result_data.get('comp_pre_order_start_date'),
                 result_data.get('comp_preorder_end_date'),
                 calendar_week,
-                result_data.get('created_at')
+                result_data.get('created_at'),
+                self.batch_id
             ))
             self.db.commit()
             return True
@@ -944,10 +973,13 @@ For the given product name, extract the following:
 
         print("\n" + "=" * 60)
         print(f"Event Date Analyzer ({mode_str}){dry_run_str}")
+        print(f"배치 ID: {self.batch_id}")
         if products_from_memory:
             print(f"소스: 메모리 (CompetitorAnalyzer 결과)")
         else:
             print(f"소스 테이블: {self.db.table_name}")
+            if self.source_batch_id:
+                print(f"소스 배치 ID: {self.source_batch_id}")
         print(f"저장 테이블: {self.event_table_name}")
         print("=" * 60)
 
@@ -1009,6 +1041,8 @@ For the given product name, extract the following:
             print("이벤트 분석 완료")
             print("=" * 60)
             print(f"모드: {mode_str}")
+            print(f"배치 ID: {self.batch_id}")
+            print(f"테이블: {self.event_table_name}")
             print(f"성공: {total_success}건")
             print(f"실패: {total_fail}건")
 
@@ -1076,18 +1110,24 @@ if __name__ == "__main__":
         test_count_input = input("  test_count: ").strip()
         test_count = int(test_count_input) if test_count_input else None
 
+        # 공통 배치 ID 생성
+        batch_id = f"t_comp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        print_log("INFO", f"배치 ID: {batch_id}")
+
         # 1단계: 경쟁제품 분석
         competitor_analyzer = CompetitorAnalyzer(
             test_mode=test_mode,
             test_product_line=test_product_line,
-            test_count=test_count
+            test_count=test_count,
+            batch_id=batch_id
         )
         competitor_analyzer.run()
 
-        # 2단계: 이벤트 날짜 분석
+        # 2단계: 이벤트 날짜 분석 (동일 batch_id 사용)
         event_analyzer = EventDateAnalyzer(
             test_mode=test_mode,
-            limit=test_count
+            source_batch_id=batch_id,
+            batch_id=batch_id
         )
         event_analyzer.run()
 
@@ -1097,12 +1137,23 @@ if __name__ == "__main__":
         test_mode = False
         print_log("INFO", "운영 모드로 실행합니다.")
 
+        # 공통 배치 ID 생성
+        batch_id = f"comp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        print_log("INFO", f"배치 ID: {batch_id}")
+
         # 1단계: 경쟁제품 분석
-        competitor_analyzer = CompetitorAnalyzer(test_mode=test_mode)
+        competitor_analyzer = CompetitorAnalyzer(
+            test_mode=test_mode,
+            batch_id=batch_id
+        )
         competitor_analyzer.run()
 
-        # 2단계: 이벤트 날짜 분석
-        event_analyzer = EventDateAnalyzer(test_mode=test_mode)
+        # 2단계: 이벤트 날짜 분석 (동일 batch_id 사용)
+        event_analyzer = EventDateAnalyzer(
+            test_mode=test_mode,
+            source_batch_id=batch_id,
+            batch_id=batch_id
+        )
         event_analyzer.run()
 
         input("\n엔터키를 누르면 종료합니다...")
