@@ -2,12 +2,13 @@
 Amazon HHP 통합 크롤러 (운영용)
 
 ================================================================================
-실행 흐름: Main → BSR → Login → Detail
+실행 흐름: Main → BSR → Login → Detail → Item
 ================================================================================
 STEP 1. Main   - 검색 결과 페이지에서 제품 목록 수집 (최대 300개)
 STEP 2. BSR    - Best Seller 페이지에서 제품 목록 수집 (2페이지)
 STEP 3. Login  - Amazon 로그인 (쿠키 갱신)
 STEP 4. Detail - 수집된 모든 제품의 상세 페이지 크롤링
+STEP 5. Item   - hhp_item_mst에 SKU 추출 및 저장
 
 ================================================================================
 주요 특징
@@ -25,13 +26,14 @@ python amazon_hhp_crawl.py
 
 # 특정 단계부터 재시작
 python amazon_hhp_crawl.py --resume-from detail --batch-id a_20250123_143045
-python amazon_hhp_crawl.py --resume-from bsr --batch-id a_20250123_143045
+python amazon_hhp_crawl.py --resume-from item --batch-id a_20250123_143045
 
 ================================================================================
 저장 테이블
 ================================================================================
 - Main/BSR     → amazon_hhp_product_list (제품 목록)
 - Detail       → hhp_retail_com (상세 정보 + 리뷰)
+- Item         → hhp_item_mst (제품 마스터)
 """
 
 import sys
@@ -48,6 +50,7 @@ setup_environment(__file__)
 from amazon.amazon_hhp_main import AmazonMainCrawler
 from amazon.amazon_hhp_bsr import AmazonBSRCrawler
 from amazon.amazon_hhp_dt import AmazonDetailCrawler
+from amazon.amazon_hhp_item import AmazonItemCrawler
 from common.base_crawler import BaseCrawler
 
 
@@ -57,7 +60,7 @@ class AmazonIntegratedCrawler:
     def __init__(self, resume_from=None, batch_id=None):
         """
         Args:
-            resume_from: 재시작 단계 ('main'/'bsr'/'login'/'detail'/None)
+            resume_from: 재시작 단계 ('main'/'bsr'/'login'/'detail'/'item'/None)
             batch_id: 재시작 시 사용할 배치 ID
         """
         self.account_name = 'Amazon'
@@ -127,11 +130,11 @@ class AmazonIntegratedCrawler:
             print(f"resume_from: {self.resume_from}")
 
         try:
-            crawl_results = {'main': None, 'bsr': None, 'login': None, 'detail': None}
+            crawl_results = {'main': None, 'bsr': None, 'login': None, 'detail': None, 'item': None}
 
             # STEP 1: Main
             if not self.resume_from or self.resume_from == 'main':
-                print(f"\n[STEP 1/4] Main Crawler...")
+                print(f"\n[STEP 1/5] Main Crawler...")
                 try:
                     crawl_results['main'] = AmazonMainCrawler(test_mode=False, batch_id=self.batch_id).run()
                 except Exception as e:
@@ -143,7 +146,7 @@ class AmazonIntegratedCrawler:
 
             # STEP 2: BSR
             if not self.resume_from or self.resume_from in ['main', 'bsr']:
-                print(f"\n[STEP 2/4] BSR Crawler...")
+                print(f"\n[STEP 2/5] BSR Crawler...")
                 try:
                     crawl_results['bsr'] = AmazonBSRCrawler(test_mode=False, batch_id=self.batch_id).run()
                 except Exception as e:
@@ -155,7 +158,7 @@ class AmazonIntegratedCrawler:
 
             # STEP 3: Login
             if not self.resume_from or self.resume_from in ['main', 'bsr', 'login']:
-                print(f"\n[STEP 3/4] Login...")
+                print(f"\n[STEP 3/5] Login...")
                 try:
                     self.login_success = self.run_login()
                     crawl_results['login'] = self.login_success
@@ -168,13 +171,25 @@ class AmazonIntegratedCrawler:
                 self.login_success = True  # resume_from=detail인 경우 기존 쿠키 사용
 
             # STEP 4: Detail
-            print(f"\n[STEP 4/4] Detail Crawler...")
+            if not self.resume_from or self.resume_from in ['main', 'bsr', 'login', 'detail']:
+                print(f"\n[STEP 4/5] Detail Crawler...")
+                try:
+                    crawl_results['detail'] = AmazonDetailCrawler(batch_id=self.batch_id, login_success=self.login_success, test_mode=False).run()
+                except Exception as e:
+                    print(f"[ERROR] Detail: {e}")
+                    traceback.print_exc()
+                    crawl_results['detail'] = False
+            else:
+                crawl_results['detail'] = 'skipped'
+
+            # STEP 5: Item
+            print(f"\n[STEP 5/5] Item Crawler...")
             try:
-                crawl_results['detail'] = AmazonDetailCrawler(batch_id=self.batch_id, login_success=self.login_success, test_mode=False).run()
+                crawl_results['item'] = AmazonItemCrawler(batch_id=self.batch_id, test_mode=False).run()
             except Exception as e:
-                print(f"[ERROR] Detail: {e}")
+                print(f"[ERROR] Item: {e}")
                 traceback.print_exc()
-                crawl_results['detail'] = False
+                crawl_results['item'] = False
 
             # 결과 출력
             self.end_time = datetime.now()
@@ -204,7 +219,7 @@ class AmazonIntegratedCrawler:
 def main():
     """운영용 통합 크롤러 진입점"""
     parser = argparse.ArgumentParser(description='Amazon HHP Integrated Crawler (Production)')
-    parser.add_argument('--resume-from', type=str, choices=['main', 'bsr', 'login', 'detail'])
+    parser.add_argument('--resume-from', type=str, choices=['main', 'bsr', 'login', 'detail', 'item'])
     parser.add_argument('--batch-id', type=str)
     args = parser.parse_args()
 
