@@ -255,11 +255,19 @@ class DatabaseManager:
         insert_query = f"""
             INSERT INTO {self.table_name} (
                 country, samsung_series_name, comp_brand, comp_series_name,
-                expected_release, comment, calender_week, created_at, batch_id
+                expected_release, comment, calender_week, created_at, batch_id, response_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         try:
+            # response_json을 JSON 문자열로 변환
+            response_json = result.get('response_json')
+            if response_json and isinstance(response_json, str):
+                # 이미 문자열이면 그대로 사용 (PostgreSQL JSONB가 자동 파싱)
+                pass
+            elif response_json:
+                response_json = json.dumps(response_json)
+
             self.cursor.execute(insert_query, (
                 'North America',
                 result['samsung_product'],
@@ -269,7 +277,8 @@ class DatabaseManager:
                 result.get('comment', ''),
                 calendar_week,
                 result.get('created_at'),
-                batch_id
+                batch_id,
+                response_json
             ))
             self.commit()
             return True
@@ -460,12 +469,7 @@ class CompetitorAnalyzer:
         self.dry_run = dry_run
         self.db = DatabaseManager(test_mode=test_mode)
         self.openai = None
-        # 외부 batch_id가 없으면 자체 생성
-        if batch_id:
-            self.batch_id = batch_id
-        else:
-            prefix = "t_comp" if test_mode else "comp"
-            self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.batch_id = batch_id
 
     def setup(self):
         """초기화"""
@@ -497,101 +501,94 @@ class CompetitorAnalyzer:
         week_number = now.isocalendar()[1]
         return f"w{week_number}"
 
-    def analyze_single(self, product_line, samsung_product, competitor_brands_list):
-        """단일 분석 (Samsung 제품 1개 vs 경쟁사 N개)
+    def analyze_single_brand(self, product_line, samsung_product, competitor_brand):
+        """단일 분석 (Samsung 제품 1개 vs 경쟁사 브랜드 1개)
 
         Args:
             product_line: 제품 라인 (TV/HHP)
             samsung_product: 삼성 제품 키워드
-            competitor_brands_list: 경쟁사 브랜드 리스트 ['LG', 'Sony', 'TCL']
+            competitor_brand: 경쟁사 브랜드 (단일 문자열, 예: 'LG')
 
         Returns:
-            list: 각 경쟁사별 결과 리스트
+            tuple: (results_list, response_json)
+                   results_list: 경쟁 제품 리스트 (OpenAI가 여러 개 반환 시 모두 포함)
         """
-        # 경쟁사 브랜드를 콤마로 연결
-        competitor_brands_str = ', '.join(competitor_brands_list)
-
         try:
-            print_log("INFO", f"분석 중: {samsung_product} vs [{competitor_brands_str}]")
+            print_log("INFO", f"  분석 중: {samsung_product} vs {competitor_brand}")
 
-            result = self.openai.analyze(product_line, samsung_product, competitor_brands_str, batch_id=self.batch_id, dry_run=self.dry_run)
+            result = self.openai.analyze(product_line, samsung_product, competitor_brand, batch_id=self.batch_id, dry_run=self.dry_run)
 
             if result['success']:
-                print_log("INFO", f"  -> 분석 완료 (토큰: {result['tokens_used']})")
+                print_log("INFO", f"    -> 완료 (토큰: {result['tokens_used']})")
 
                 # OpenAI 응답에서 competitor_analysis 배열 추출
-                results = []
                 try:
                     response_data = json.loads(result['response'])
                     competitor_analysis = response_data.get('competitor_analysis', [])
 
-                    for comp in competitor_analysis:
-                        results.append({
-                            'samsung_product': samsung_product,
-                            'comp_brand': comp.get('brand', 'unknown'),
-                            'comp_sku_name': comp.get('comp_sku_name', 'info_not_available'),
-                            'expected_release': comp.get('expected_release', ''),
-                            'comment': comp.get('comment', ''),
-                            'product_line': product_line,
-                            'response_json': result['response'],
-                            'success': True,
-                            'created_at': result.get('response_time')
-                        })
+                    # 모든 항목을 리스트로 반환
+                    if competitor_analysis:
+                        results = []
+                        for comp in competitor_analysis:
+                            results.append({
+                                'samsung_product': samsung_product,
+                                'comp_brand': comp.get('brand', competitor_brand),
+                                'comp_sku_name': comp.get('comp_sku_name', 'info_not_available'),
+                                'expected_release': comp.get('expected_release', ''),
+                                'comment': comp.get('comment', ''),
+                                'product_line': product_line,
+                                'response_json': result['response'],
+                                'success': True,
+                                'created_at': result.get('response_time')
+                            })
+                        print_log("INFO", f"    -> {len(results)}개 경쟁제품 발견")
+                        return results, result['response']
 
                 except (json.JSONDecodeError, TypeError) as e:
                     print_log("WARNING", f"JSON 파싱 실패: {e}")
-                    # 파싱 실패 시 각 브랜드별로 info_not_available 반환
-                    for brand in competitor_brands_list:
-                        results.append({
-                            'samsung_product': samsung_product,
-                            'comp_brand': brand,
-                            'comp_sku_name': 'info_not_available',
-                            'expected_release': '',
-                            'comment': '',
-                            'product_line': product_line,
-                            'response_json': result['response'],
-                            'success': True,
-                            'created_at': result.get('response_time')
-                        })
 
-                return results, result['response']
+                # 파싱 실패 시
+                return [{
+                    'samsung_product': samsung_product,
+                    'comp_brand': competitor_brand,
+                    'comp_sku_name': 'info_not_available',
+                    'expected_release': '',
+                    'comment': '',
+                    'product_line': product_line,
+                    'response_json': result['response'],
+                    'success': True,
+                    'created_at': result.get('response_time')
+                }], result['response']
 
             else:
-                print_log("WARNING", f"  -> 분석 실패: {result.get('error', 'Unknown error')}")
-                # 실패 시 각 브랜드별로 info_not_available 반환
-                results = []
-                for brand in competitor_brands_list:
-                    results.append({
-                        'samsung_product': samsung_product,
-                        'comp_brand': brand,
-                        'comp_sku_name': 'info_not_available',
-                        'expected_release': '',
-                        'comment': '',
-                        'product_line': product_line,
-                        'response_json': None,
-                        'success': False
-                    })
-                return results, None
-
-        except Exception as e:
-            print_log("ERROR", f"분석 실패 ({samsung_product}): {e}")
-            traceback.print_exc()
-            results = []
-            for brand in competitor_brands_list:
-                results.append({
+                print_log("WARNING", f"    -> 분석 실패: {result.get('error', 'Unknown error')}")
+                return [{
                     'samsung_product': samsung_product,
-                    'comp_brand': brand,
+                    'comp_brand': competitor_brand,
                     'comp_sku_name': 'info_not_available',
                     'expected_release': '',
                     'comment': '',
                     'product_line': product_line,
                     'response_json': None,
                     'success': False
-                })
-            return results, None
+                }], None
+
+        except Exception as e:
+            print_log("ERROR", f"분석 실패 ({samsung_product} vs {competitor_brand}): {e}")
+            traceback.print_exc()
+            return [{
+                'samsung_product': samsung_product,
+                'comp_brand': competitor_brand,
+                'comp_sku_name': 'info_not_available',
+                'expected_release': '',
+                'comment': '',
+                'product_line': product_line,
+                'response_json': None,
+                'success': False
+            }], None
 
     def analyze_all_products(self, samsung_products, competitor_brands, calendar_week, dry_run=False):
-        """모든 Samsung 제품 분석 (카테고리별 → 제품별)
+        """모든 Samsung 제품 분석 (카테고리별 → 제품별 → 브랜드별)
 
         Args:
             samsung_products: [(id, product_line, keyword), ...]
@@ -624,8 +621,13 @@ class CompetitorAnalyzer:
 
         # 고정 카테고리 목록
         CATEGORIES = ['TV', 'HHP']
-        total_products = len(samsung_products)
-        current_idx = 0
+
+        # 전체 API 호출 수 계산 (Samsung 제품 수 × 경쟁사 브랜드 수)
+        total_api_calls = sum(
+            len(samsung_by_category.get(cat, [])) * len(comp_by_category.get(cat, []))
+            for cat in CATEGORIES
+        )
+        current_api_call = 0
 
         # 카테고리별로 처리
         for category in CATEGORIES:
@@ -638,51 +640,50 @@ class CompetitorAnalyzer:
 
             if not comp_brands:
                 print_log("WARNING", f"[{category}] 경쟁사 브랜드 없음, 스킵")
-                current_idx += len(samsung_list)
                 continue
 
             print_log("INFO", f"\n{'='*60}")
-            print_log("INFO", f"[{category}] 분석 시작 - Samsung {len(samsung_list)}개 vs 경쟁사 {len(comp_brands)}개")
+            print_log("INFO", f"[{category}] 분석 시작 - Samsung {len(samsung_list)}개 × 경쟁사 {len(comp_brands)}개 = {len(samsung_list) * len(comp_brands)}회 API 호출")
             print_log("INFO", f"[{category}] 경쟁사: {', '.join(comp_brands)}")
             print_log("INFO", f"{'='*60}")
 
             # 해당 카테고리의 Samsung 제품별로 분석
             for samsung_keyword in samsung_list:
-                current_idx += 1
-                print(f"\n[{current_idx}/{total_products}] ", end="")
+                print_log("INFO", f"\n[Samsung] {samsung_keyword}")
 
-                # Samsung 1개 vs 경쟁사 N개 분석
-                results, response_json = self.analyze_single(category, samsung_keyword, comp_brands)
+                # 각 경쟁사 브랜드별로 개별 API 호출
+                for comp_brand in comp_brands:
+                    current_api_call += 1
+                    print(f"[{current_api_call}/{total_api_calls}] ", end="")
 
-                # 결과 처리
-                success_count = sum(1 for r in results if r['success'])
-                fail_count = len(results) - success_count
+                    # Samsung 1개 vs 경쟁사 1개 분석 (결과는 리스트로 반환)
+                    results_list, response_json = self.analyze_single_brand(category, samsung_keyword, comp_brand)
 
-                if dry_run:
-                    print_log("INFO", f"=" * 50)
-                    print_log("INFO", f"[DRY RUN] {samsung_keyword} vs [{', '.join(comp_brands)}]")
-                    for r in results:
-                        print_log("INFO", f"[DRY RUN] {r['comp_brand']}: {r['comp_sku_name']}")
-                        # DRY RUN용 제품 목록 수집 (info_not_available 제외)
-                        if r['success'] and r['comp_sku_name'] != 'info_not_available':
-                            dry_run_products.append((r['comp_brand'], r['comp_sku_name']))
-                    print_log("INFO", f"[DRY RUN] OpenAI 응답:")
-                    print_log("INFO", response_json)
-                    print_log("INFO", f"=" * 50)
-                    total_success += success_count
-                else:
-                    # 성공한 결과 즉시 저장
-                    for r in results:
-                        if r['success']:
-                            if self.db.save_single_result(r, calendar_week, self.batch_id):
+                    # 결과 리스트 순회하며 처리
+                    for result in results_list:
+                        if dry_run:
+                            print_log("INFO", f"[DRY RUN] {samsung_keyword} vs {comp_brand}: {result['comp_sku_name']}")
+                            if response_json:
+                                print_log("INFO", f"[DRY RUN] 응답: {response_json}")
+                            # DRY RUN용 제품 목록 수집 (info_not_available 제외)
+                            if result['success'] and result['comp_sku_name'] != 'info_not_available':
+                                dry_run_products.append((result['comp_brand'], result['comp_sku_name']))
+                            if result['success']:
                                 total_success += 1
                             else:
                                 total_fail += 1
+                        else:
+                            # 성공한 결과 즉시 저장
+                            if result['success']:
+                                if self.db.save_single_result(result, calendar_week, self.batch_id):
+                                    total_success += 1
+                                else:
+                                    total_fail += 1
+                            else:
+                                total_fail += 1
 
-                total_fail += fail_count
-
-                # API 요청 간격 (Rate limit 방지)
-                time.sleep(1)
+                    # API 요청 간격 (Rate limit 방지)
+                    time.sleep(1)
 
         # DRY RUN일 때는 제품 목록도 반환 (중복 제거 - 튜플이므로 set 사용 가능)
         if dry_run:
@@ -800,12 +801,7 @@ class EventDateAnalyzer:
         self.event_table_name = 'test_market_comp_event' if test_mode else 'market_comp_event'
         self.template_id = None
         self.template = None
-        # 외부 batch_id가 없으면 자체 생성
-        if batch_id:
-            self.batch_id = batch_id
-        else:
-            prefix = "t_comp" if test_mode else "comp"
-            self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.batch_id = batch_id
 
     def setup(self):
         """초기화"""
@@ -923,15 +919,15 @@ class EventDateAnalyzer:
                 'error': str(e)
             }
 
-    def save_event_result(self, result_data, calendar_week, comp_brand):
+    def save_event_result(self, result_data, calendar_week, comp_brand, response_json=None):
         """이벤트 분석 결과 저장"""
         insert_query = f"""
             INSERT INTO {self.event_table_name} (
                 country, comp_brand, comp_sku_name, comp_launch_date, comp_preorder,
                 comp_pre_order_start_date, comp_preorder_end_date,
-                calender_week, created_at, batch_id
+                calender_week, created_at, batch_id, response_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         try:
             self.db.cursor.execute(insert_query, (
@@ -944,7 +940,8 @@ class EventDateAnalyzer:
                 result_data.get('comp_preorder_end_date'),
                 calendar_week,
                 result_data.get('created_at'),
-                self.batch_id
+                self.batch_id,
+                response_json
             ))
             self.db.commit()
             return True
@@ -1021,7 +1018,7 @@ class EventDateAnalyzer:
                             print_log("INFO", f"[DRY RUN] 응답: {result['response']}")
                             total_success += 1
                         else:
-                            if self.save_event_result(response_data, calendar_week, comp_brand):
+                            if self.save_event_result(response_data, calendar_week, comp_brand, result['response']):
                                 total_success += 1
                             else:
                                 total_fail += 1
@@ -1111,7 +1108,7 @@ if __name__ == "__main__":
         test_count = int(test_count_input) if test_count_input else None
 
         # 공통 배치 ID 생성
-        batch_id = f"t_comp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        batch_id = f"t_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         print_log("INFO", f"배치 ID: {batch_id}")
 
         # 1단계: 경쟁제품 분석
@@ -1138,7 +1135,7 @@ if __name__ == "__main__":
         print_log("INFO", "운영 모드로 실행합니다.")
 
         # 공통 배치 ID 생성
-        batch_id = f"comp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        batch_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         print_log("INFO", f"배치 ID: {batch_id}")
 
         # 1단계: 경쟁제품 분석

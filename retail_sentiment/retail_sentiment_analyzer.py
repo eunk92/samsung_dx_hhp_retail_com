@@ -394,12 +394,7 @@ class TVSentimentAnalyzer:
         self.source_table = 'tv_retail_com'
         self.master_table = 'tv_item_mst'
         self.target_table = 'test_tv_retail_sentiment' if test_mode else 'tv_retail_sentiment'
-        # 외부 batch_id가 없으면 자체 생성
-        if batch_id:
-            self.batch_id = batch_id
-        else:
-            prefix = "t_senti" if test_mode else "senti"
-            self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.batch_id = batch_id
 
     def setup(self):
         """초기화"""
@@ -503,10 +498,10 @@ class TVSentimentAnalyzer:
             final_interpretation = response_data.get('final_interpretation')
 
             query = f"""
-                INSERT INTO {self.target_table} (retail_com_id, sentiment_score, final_interpretation, batch_id, created_at)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO {self.target_table} (retail_com_id, sentiment_score, final_interpretation, batch_id, created_at, response_json)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """
-            self.db.execute(query, (retail_com_id, str(sentiment_score), final_interpretation, self.batch_id, datetime.now()))
+            self.db.execute(query, (retail_com_id, str(sentiment_score), final_interpretation, self.batch_id, datetime.now(), response_text))
             self.db.commit()
             print_log("INFO", f"  -> 저장 완료 (테이블: {self.target_table})")
         except Exception as e:
@@ -627,12 +622,7 @@ class HHPSentimentAnalyzer:
         self.source_table = 'hhp_retail_com'
         self.master_table = 'hhp_item_mst'
         self.target_table = 'test_hhp_retail_sentiment' if test_mode else 'hhp_retail_sentiment'
-        # 외부 batch_id가 없으면 자체 생성
-        if batch_id:
-            self.batch_id = batch_id
-        else:
-            prefix = "t_senti" if test_mode else "senti"
-            self.batch_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.batch_id = batch_id
 
     def setup(self):
         """초기화"""
@@ -736,10 +726,10 @@ class HHPSentimentAnalyzer:
             final_interpretation = response_data.get('final_interpretation')
 
             query = f"""
-                INSERT INTO {self.target_table} (retail_com_id, sentiment_score, final_interpretation, batch_id, created_at)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO {self.target_table} (retail_com_id, sentiment_score, final_interpretation, batch_id, created_at, response_json)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """
-            self.db.execute(query, (retail_com_id, str(sentiment_score), final_interpretation, self.batch_id, datetime.now()))
+            self.db.execute(query, (retail_com_id, str(sentiment_score), final_interpretation, self.batch_id, datetime.now(), response_text))
             self.db.commit()
             print_log("INFO", f"  -> 저장 완료 (테이블: {self.target_table})")
         except Exception as e:
@@ -874,7 +864,7 @@ if __name__ == "__main__":
         test_count = int(test_count_input) if test_count_input else None
 
         # 공통 배치 ID 생성
-        batch_id = f"t_senti_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        batch_id = f"t_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         print_log("INFO", f"배치 ID: {batch_id}")
 
         # TV 분석
@@ -927,7 +917,7 @@ if __name__ == "__main__":
         test_count = int(test_count_input) if test_count_input else None
 
         # 공통 배치 ID 생성
-        batch_id = f"t_senti_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        batch_id = f"t_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         print_log("INFO", f"배치 ID: {batch_id}")
 
         # TV 분석
@@ -976,7 +966,7 @@ if __name__ == "__main__":
         print(f"로그 파일: {log_file}")
 
         # 공통 배치 ID 생성
-        batch_id = f"senti_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        batch_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         print_log("INFO", f"배치 ID: {batch_id}")
 
         # TV 분석

@@ -14,3 +14,9 @@ pytz>=2023.3
 
 # AI / LLM
 openai>=1.0.0
+
+# Data Processing
+pandas>=2.0.0
+
+# IMF Data API
+sdmx1>=2.0.0
