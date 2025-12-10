@@ -2,28 +2,26 @@
 Market 10대 인자 - 자본스톡 (Capital Stock)
 
 IMF Investment and Capital Stock Dataset (ICSD) 데이터 수집
-Penn World Table 기준 실질 PPP 자본스톡 데이터 추출
 
 ================================================================================
 데이터 소스
 ================================================================================
 - IMF ICSD (Investment and Capital Stock Dataset)
-- 데이터: 자본 스톡 (실질, PPP 기준)
+- 지표: CAPSTCK_PS_V_XDC (Capital stock, private sector, current prices, domestic currency)
 
 ================================================================================
-API 엔드포인트 (2025-12-09 확인)
+API 엔드포인트 (SDMX 3.0)
 ================================================================================
-IMF SDMX 2.1 REST API:
-- Base URL: https://api.imf.org/external/sdmx/2.1/
-- 데이터 조회: /data/{flowRef}/{key}
-- 가용성 조회: /availableconstraint/{flowRef}/{key}/{providerRef}/{componentID}
+IMF SDMX 3.0 REST API:
+- Base URL: https://api.imf.org/external/sdmx/3.0
+- 데이터 조회: /data/{context}/{agencyID}/{resourceID}/{version}/{key}
 
 참고: https://portal.api.imf.org/apis#tags=iData
 
 ================================================================================
 필요 패키지
 ================================================================================
-pip install pandas requests
+pip install requests
 
 ================================================================================
 """
@@ -33,7 +31,6 @@ import sys
 import logging
 import traceback
 import requests
-import pandas as pd
 from datetime import datetime
 
 # 상위 디렉토리의 config.py 참조
@@ -72,17 +69,18 @@ def print_log(level, message):
 
 
 # ============================================================================
-# IMF SDMX 2.1 REST API 클라이언트
+# IMF SDMX 3.0 REST API 클라이언트
 # ============================================================================
 
 class IMFCapitalStockClient:
-    """IMF ICSD SDMX 2.1 REST API 클라이언트 - 자본스톡 데이터 조회
+    """IMF ICSD SDMX 3.0 REST API 클라이언트 - 자본스톡 데이터 조회
 
-    IMF SDMX 2.1 API:
-    https://api.imf.org/external/sdmx/2.1/
+    IMF SDMX 3.0 API:
+    https://api.imf.org/external/sdmx/3.0
     """
 
-    BASE_URL = "https://api.imf.org/external/sdmx/2.1"
+    BASE_URL = "https://api.imf.org/external/sdmx/3.0"
+    DATAFLOW = "IMF.FAD/ICSD"  # Investment and Capital Stock Dataset
 
     def __init__(self):
         self.session = requests.Session()
@@ -90,296 +88,502 @@ class IMFCapitalStockClient:
             'Accept': 'application/json',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        self.database_id = "ICSD"  # Investment and Capital Stock Dataset
 
-        # XML 저장 폴더
-        self.xml_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'xml')
-        os.makedirs(self.xml_dir, exist_ok=True)
-
-    def _save_xml_response(self, xml_text, key):
-        """XML 응답을 파일로 저장"""
-        try:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            # key에서 파일명 생성 (특수문자 제거)
-            safe_key = key.replace('+', '_').replace('.', '_')[:50]
-            filename = f"capital_stock_{safe_key}_{timestamp}.xml"
-            filepath = os.path.join(self.xml_dir, filename)
-
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(xml_text)
-
-            print_log("INFO", f"XML 저장: {filepath}")
-        except Exception as e:
-            print_log("WARNING", f"XML 저장 실패: {e}")
-
-    def get_data(self, key="all", start_period=None, end_period=None, format_type="json"):
+    def get_data(self, key="*", start_year=None, end_year=None):
         """
-        ICSD 데이터 조회 (SDMX 2.1 REST API)
+        ICSD 데이터 조회 (SDMX 3.0 REST API)
 
         Args:
-            key: 데이터 키 (예: 'US', 'US+KR', 'US.KN_PPP_XDC')
-            start_period: 시작 기간 (예: '2010')
-            end_period: 종료 기간 (예: '2023')
-            format_type: 응답 형식 ('json' 또는 'xml')
+            key: 데이터 키 (예: 'USA', 'USA+KOR', '*'=전체)
+            start_year: 시작 연도 (예: 2015)
+            end_year: 종료 연도 (예: 2020)
 
         Returns:
-            dict/str: API 응답 데이터
+            tuple: (request_url, response_json)
         """
         try:
-            # 데이터 엔드포인트: /data/{flowRef}/{key}
-            url = f"{self.BASE_URL}/data/IMF.FAD,{self.database_id}/{key}"
+            # SDMX 3.0 엔드포인트: /data/dataflow/{agencyID}/{resourceID}/+/{key}
+            base_url = f"{self.BASE_URL}/data/dataflow/{self.DATAFLOW}/+/{key}"
 
-            params = {}
-            if start_period:
-                params['startPeriod'] = start_period
-            if end_period:
-                params['endPeriod'] = end_period
+            # 쿼리 파라미터 (이미 인코딩된 형태로 직접 구성)
+            query_parts = [
+                'dimensionAtObservation=TIME_PERIOD',
+                'attributes=dsd',
+                'measures=all',
+                'includeHistory=false'
+            ]
 
+            # 기간 필터링: c[TIME_PERIOD] 파라미터
+            # URL 인코딩: [ → %5B, ] → %5D, + → %2B
+            if start_year and end_year:
+                query_parts.append(f'c%5BTIME_PERIOD%5D=ge:{start_year}-01%2Ble:{end_year}-12')
+
+            url = f"{base_url}?{'&'.join(query_parts)}"
             print_log("INFO", f"데이터 요청: {url}")
-            if params:
-                print_log("INFO", f"파라미터: {params}")
 
-            # Accept 헤더 설정
-            headers = {'Accept': 'application/json' if format_type == 'json' else 'application/xml'}
-
-            resp = self.session.get(url, params=params, headers=headers, timeout=120)
+            resp = self.session.get(url, timeout=120)
+            request_url = resp.url
             print_log("INFO", f"응답 상태: {resp.status_code}")
 
             if resp.status_code == 200:
-                if format_type == 'json':
-                    return resp.json()
-                else:
-                    # XML 응답을 파일로 저장
-                    self._save_xml_response(resp.text, key)
-                    return resp.text
+                return request_url, resp.json()
             else:
                 print_log("WARNING", f"응답 코드: {resp.status_code}")
                 print_log("WARNING", f"응답 내용: {resp.text[:1000]}")
-                return None
+                return request_url, None
 
         except Exception as e:
             print_log("ERROR", f"데이터 조회 실패: {e}")
             traceback.print_exc()
-            return None
+            return url, None
+
+    INDICATOR = "CAPSTCK_PS_V_XDC"  # 민간 자본스톡 (현재 가격, 자국 통화)
+    FREQUENCY = "A"  # 연간
 
     def get_capital_stock_data(self, country_codes, start_year=None, end_year=None):
         """
-        자본스톡 데이터 조회 (민간+정부 합산)
+        자본스톡 데이터 조회
 
         Args:
-            country_codes: 국가 코드 리스트 또는 문자열 (예: ['USA', 'KOR'] 또는 'USA')
+            country_codes: 국가 코드 리스트 또는 문자열 (예: ['USA', 'KOR'] 또는 'USA' 또는 'all')
             start_year: 시작 연도
             end_year: 종료 연도
 
         Returns:
-            pd.DataFrame: 자본스톡 데이터 (year, country, capital_stock)
+            tuple: (request_url, response_json, data_list)
 
         Note:
-            capital_stock = 민간(CAPSTCK_PS_Q_PU_RY2017) + 정부(CAPSTCK_S13_Q_PU_RY2017)
-            단위: Billions of 2017 PPP international dollars (10억 달러)
+            indicator: CAPSTCK_PS_V_XDC (민간 자본스톡, 현재 가격, 자국 통화)
         """
         try:
-            # 국가 코드 처리 (리스트면 + 로 연결)
-            if isinstance(country_codes, list):
+            # 국가 코드 처리
+            if not country_codes or country_codes == 'all':
+                country_key = '*'
+            elif isinstance(country_codes, list):
                 country_key = '+'.join(country_codes)
             else:
                 country_key = country_codes
 
-            # 민간 + 정부 지표 조회
-            indicators = [
-                'CAPSTCK_PS_Q_PU_RY2017',   # 민간 자본스톡
-                'CAPSTCK_S13_Q_PU_RY2017',  # 정부 자본스톡
-            ]
-            indicator_key = '+'.join(indicators)
-
             # 키 구성: 국가.지표.빈도
-            key = f"{country_key}.{indicator_key}.A"
+            key = f"{country_key}.{self.INDICATOR}.{self.FREQUENCY}"
 
             print_log("INFO", f"자본스톡 조회: key={key}")
 
-            # XML 형식으로 데이터 요청
-            data = self.get_data(
+            # JSON 형식으로 데이터 요청
+            request_url, response_json = self.get_data(
                 key=key,
-                start_period=str(start_year) if start_year else None,
-                end_period=str(end_year) if end_year else None,
-                format_type="xml"
+                start_year=start_year,
+                end_year=end_year
             )
 
-            if not data:
-                return None
+            if not response_json:
+                return request_url, response_json, None
 
-            # XML 응답 파싱
-            results = self._parse_xml_response(data)
+            # JSON 응답 파싱
+            results = self._parse_json_response(response_json)
 
             if not results:
                 print_log("WARNING", "파싱된 데이터 없음")
-                return None
+                return request_url, response_json, None
 
-            df = pd.DataFrame(results)
-            print_log("INFO", f"데이터 {len(df)}건 조회 완료")
+            print_log("INFO", f"데이터 {len(results)}건 조회 완료")
 
-            if len(df) == 0:
-                return None
+            # 데이터 변환 (리스트 형태)
+            data_list = []
+            for row in results:
+                data_list.append({
+                    'year': int(row['year']),
+                    'country_code': row['country'],
+                    'indicator': self.INDICATOR,
+                    'frequency': self.FREQUENCY,
+                    'capital_stock': row['value']
+                })
 
-            # 피벗 테이블로 변환 (연도, 국가별 민간/정부 합산)
-            df_pivot = df.pivot_table(
-                index=['year', 'country'],
-                columns='indicator',
-                values='value',
-                aggfunc='first'
-            ).reset_index()
+            # 정렬 (country_code, year)
+            data_list.sort(key=lambda x: (x['country_code'], x['year']))
 
-            df_pivot.columns.name = None
-
-            # 민간 + 정부 합산하여 capital_stock 컬럼 생성
-            # Indicator: CAPSTCK_PS_Q_PU_RY2017 (민간) + CAPSTCK_S13_Q_PU_RY2017 (정부)
-            private_col = 'CAPSTCK_PS_Q_PU_RY2017'
-            gov_col = 'CAPSTCK_S13_Q_PU_RY2017'
-
-            if private_col in df_pivot.columns and gov_col in df_pivot.columns:
-                df_pivot['capital_stock'] = df_pivot[private_col] + df_pivot[gov_col]
-            elif private_col in df_pivot.columns:
-                df_pivot['capital_stock'] = df_pivot[private_col]
-            elif gov_col in df_pivot.columns:
-                df_pivot['capital_stock'] = df_pivot[gov_col]
-            else:
-                print_log("WARNING", "민간/정부 자본스톡 컬럼 없음")
-                return None
-
-            # 필요한 컬럼만 선택
-            df_result = df_pivot[['year', 'country', 'capital_stock']].copy()
-
-            # 정렬
-            df_result = df_result.sort_values(['country', 'year']).reset_index(drop=True)
-
-            print_log("INFO", f"데이터 변환 완료: {len(df_result)}건")
-            return df_result
+            print_log("INFO", f"데이터 변환 완료: {len(data_list)}건")
+            return request_url, response_json, data_list
 
         except Exception as e:
             print_log("ERROR", f"자본스톡 조회 실패: {e}")
             traceback.print_exc()
-            return None
+            return None, None, None
 
-    def _parse_xml_response(self, xml_data):
-        """XML 응답 파싱"""
+    def _parse_json_response(self, data):
+        """JSON 응답 파싱 (SDMX 3.0)"""
         results = []
         try:
-            from lxml import etree
-            root = etree.fromstring(xml_data.encode('utf-8'))
+            datasets = data.get('data', {}).get('dataSets', [])
+            structures = data.get('data', {}).get('structures', [])
 
-            # Series 요소 찾기 (태그명 끝이 Series인 모든 요소)
-            series_list = [elem for elem in root.iter() if elem.tag.endswith('Series')]
-            print_log("DEBUG", f"Series 수: {len(series_list)}")
+            if not datasets or not structures:
+                print_log("WARNING", "데이터셋 또는 구조 정보 없음")
+                return []
 
-            for series in series_list:
-                # 시리즈 속성에서 국가, 지표 추출
-                attrs = dict(series.attrib)
-                country = attrs.get('COUNTRY', attrs.get('REF_AREA', ''))
-                indicator = attrs.get('INDICATOR', '')
+            # 구조 정보에서 차원 값들 추출
+            country_codes = []
+            time_periods = []
 
-                # Obs (관측치) 찾기
-                obs_list = [elem for elem in series.iter() if elem.tag.endswith('Obs')]
+            for struct in structures:
+                # series dimensions에서 국가 코드 추출
+                series_dims = struct.get('dimensions', {}).get('series', [])
+                for dim in series_dims:
+                    if dim.get('id') in ('COUNTRY', 'REF_AREA'):
+                        country_codes = [v.get('id') for v in dim.get('values', [])]
 
-                for obs in obs_list:
-                    obs_attrs = dict(obs.attrib)
-                    year = obs_attrs.get('TIME_PERIOD', '')
-                    value_str = obs_attrs.get('OBS_VALUE', '')
+                # observation dimensions에서 시간 기간 추출
+                obs_dims = struct.get('dimensions', {}).get('observation', [])
+                for dim in obs_dims:
+                    if dim.get('id') == 'TIME_PERIOD':
+                        time_periods = [v.get('value') for v in dim.get('values', [])]
+                        break
 
-                    if value_str:
-                        try:
-                            value = float(value_str)
+            print_log("DEBUG", f"국가 수: {len(country_codes)}, 기간 수: {len(time_periods)}")
+
+            # 관측값 추출
+            for dataset in datasets:
+                series = dataset.get('series', {})
+                for series_key, series_data in series.items():
+                    # series_key에서 국가 인덱스 추출
+                    key_parts = series_key.split(':')
+                    country_idx = int(key_parts[0]) if key_parts else 0
+                    country = country_codes[country_idx] if country_idx < len(country_codes) else 'UNKNOWN'
+
+                    # 관측값 처리
+                    observations = series_data.get('observations', {})
+                    for idx_str, value_list in observations.items():
+                        idx = int(idx_str)
+                        if idx < len(time_periods) and value_list:
                             results.append({
                                 'country': country,
-                                'indicator': indicator,
-                                'year': year,
-                                'value': value
+                                'year': time_periods[idx],
+                                'value': float(value_list[0])
                             })
-                        except ValueError:
-                            pass
 
             print_log("DEBUG", f"파싱 결과: {len(results)}건")
 
         except Exception as e:
-            print_log("ERROR", f"XML 파싱 오류: {e}")
+            print_log("ERROR", f"JSON 파싱 오류: {e}")
             traceback.print_exc()
 
         return results
+
+    def extract_unit_info(self, data):
+        """API 응답에서 단위 정보 추출"""
+        unit_info = {}
+        try:
+            structures = data.get('data', {}).get('structures', [])
+
+            for struct in structures:
+                # attributes에서 UNIT_MEASURE, UNIT_MULT 등 추출
+                attrs = struct.get('attributes', {})
+
+                # series attributes
+                series_attrs = attrs.get('series', [])
+                for attr in series_attrs:
+                    attr_id = attr.get('id')
+                    values = attr.get('values', [])
+                    if attr_id == 'UNIT_MEASURE' and values:
+                        unit_info['unit_measure'] = values[0].get('name', values[0].get('id', ''))
+                    elif attr_id == 'UNIT_MULT' and values:
+                        unit_info['unit_mult'] = values[0].get('name', values[0].get('id', ''))
+
+                # observation attributes
+                obs_attrs = attrs.get('observation', [])
+                for attr in obs_attrs:
+                    attr_id = attr.get('id')
+                    values = attr.get('values', [])
+                    if attr_id == 'UNIT_MEASURE' and values:
+                        unit_info['unit_measure'] = values[0].get('name', values[0].get('id', ''))
+                    elif attr_id == 'UNIT_MULT' and values:
+                        unit_info['unit_mult'] = values[0].get('name', values[0].get('id', ''))
+
+                # dimensions에서 indicator 이름 추출
+                series_dims = struct.get('dimensions', {}).get('series', [])
+                for dim in series_dims:
+                    if dim.get('id') == 'INDICATOR':
+                        values = dim.get('values', [])
+                        if values:
+                            unit_info['indicator_name'] = values[0].get('name', '')
+
+        except Exception as e:
+            print_log("WARNING", f"단위 정보 추출 실패: {e}")
+
+        return unit_info
+
+
+# ============================================================================
+# API 요청 저장
+# ============================================================================
+
+def save_api_request(api_name, batch_id, request_url, response_json):
+    """API 요청/응답 저장"""
+    try:
+        import psycopg2
+        import json
+        from config import DB_CONFIG
+
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO market_10factor_api_request
+                (api_name, batch_id, request_url, response_json, created_at)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (
+            api_name,
+            batch_id,
+            request_url,
+            json.dumps(response_json) if response_json else None,
+            datetime.now()
+        ))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        print_log("INFO", f"API 요청 저장 완료: {api_name}")
+        return True
+
+    except Exception as e:
+        print_log("ERROR", f"API 요청 저장 실패: {e}")
+        traceback.print_exc()
+        return False
+
 
 # ============================================================================
 # 메인 실행
 # ============================================================================
 
-def dry_run():
-    """드라이 모드 - API 응답값 확인 (미국, 2015년 이후)"""
+def input_with_timeout(prompt, timeout=10):
+    """타임아웃 지원 입력 (Windows/Linux 호환)"""
+    import sys
+    import time
+
+    if sys.platform == 'win32':
+        # Windows
+        import msvcrt
+        print(f"{prompt}: ", end='', flush=True)
+
+        value = ''
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if msvcrt.kbhit():
+                char = msvcrt.getwch()
+                if char == '\r':
+                    print()
+                    break
+                elif char == '\b':
+                    if value:
+                        value = value[:-1]
+                        print('\b \b', end='', flush=True)
+                else:
+                    value += char
+                    print(char, end='', flush=True)
+            time.sleep(0.1)
+        else:
+            print("\n시간 초과")
+            return None
+
+        return value.strip() if value.strip() else None
+    else:
+        # Linux/Unix
+        import select
+        print(f"{prompt} ({timeout}초 대기): ", end='', flush=True)
+
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if ready:
+            value = sys.stdin.readline().strip()
+            return value if value else None
+        else:
+            print("\n시간 초과")
+            return None
+
+
+def get_previous_year():
+    """전년도 반환"""
+    return datetime.now().year - 1
+
+
+def parse_year_input(year_input):
+    """연도 입력 파싱
+
+    Args:
+        year_input: 연도 입력값
+            - None/빈값: 전년도
+            - 'all': 전체 연도
+            - '2023': 단일 연도
+            - '2015-2020': 범위
+
+    Returns:
+        tuple: (start_year, end_year, display_text)
+    """
+    if not year_input:
+        prev_year = get_previous_year()
+        return prev_year, prev_year, f"{prev_year}년 (전년도)"
+
+    if year_input.lower() == 'all':
+        return None, None, "전체 연도"
+
+    if '-' in year_input:
+        # 범위: 2015-2020
+        parts = year_input.split('-')
+        start_year = int(parts[0].strip())
+        end_year = int(parts[1].strip())
+        return start_year, end_year, f"{start_year}~{end_year}년"
+
+    # 단일 연도
+    year = int(year_input)
+    return year, year, f"{year}년"
+
+
+def parse_country_input(country_input):
+    """국가 입력 파싱
+
+    Args:
+        country_input: 국가 입력값
+            - None/빈값: 전체 국가
+            - 'USA': 단일 국가
+            - 'USA,KOR,JPN': 여러 국가 (쉼표 구분)
+
+    Returns:
+        tuple: (country_codes, display_text)
+            - country_codes: 'all' 또는 리스트
+    """
+    if not country_input:
+        return 'all', "전체 국가"
+
+    # 쉼표로 구분된 국가 코드
+    codes = [c.strip().upper() for c in country_input.split(',')]
+    codes = [c for c in codes if c]  # 빈 값 제거
+
+    if not codes:
+        return 'all', "전체 국가"
+
+    if len(codes) == 1:
+        return codes, codes[0]
+
+    return codes, ','.join(codes)
+
+
+def dry_run(year=None, country=None):
+    """드라이 모드 - API 응답값 확인 - DB 저장 없음"""
     setup_logger()
+    batch_id = "t_" + datetime.now().strftime('%Y%m%d_%H%M%S')
 
     print("\n" + "=" * 60)
     print("Market 10대 인자 - 자본스톡 [DRY RUN]")
     print("=" * 60)
-    print("대상: 미국(USA), 2015년 이후")
+    print(f"배치 ID: {batch_id}")
+
+    # 연도 설정
+    start_year, end_year, year_text = parse_year_input(year)
+    # 국가 설정
+    country_codes, country_text = parse_country_input(country)
+    print(f"대상: {country_text}, {year_text}")
     print()
 
     client = IMFCapitalStockClient()
 
-    # 자본스톡 데이터 조회 (미국, 2015년 이후)
-    print_log("INFO", "자본스톡 데이터 조회 (미국, 2015~최신)...")
+    print_log("INFO", f"자본스톡 데이터 조회...")
 
-    df = client.get_capital_stock_data(
-        country_codes=['USA'],
-        start_year=2015,
-        end_year=None  # 최신까지
+    _, response_json, data_list = client.get_capital_stock_data(
+        country_codes=country_codes,
+        start_year=start_year,
+        end_year=end_year
     )
 
-    if df is not None and len(df) > 0:
-        print(f"\nDataFrame shape: {df.shape}")
-        print(f"컬럼: {list(df.columns)}")
-        print()
-        print(df.to_string())
+    if data_list and len(data_list) > 0:
+        # 지표 정보 출력 (API 응답에서 추출)
+        print("\n[지표 정보]")
+        print(f"  지표: {client.INDICATOR}")
+        print(f"  설명: Capital stock, private sector, current prices, domestic currency")
+
+        # API 응답에서 단위 정보 추출
+        if response_json:
+            unit_info = client.extract_unit_info(response_json)
+            unit_measure = unit_info.get('unit_measure', 'Domestic currency')
+            unit_mult = unit_info.get('unit_mult', '')
+            print(f"  단위: {unit_measure}")
+            if unit_mult:
+                print(f"  스케일: {unit_mult}")
+        else:
+            print(f"  단위: Domestic currency (자국 통화)")
+
+        print(f"  빈도: Annual (연간)")
+
+        # 데이터 통계
+        countries = set(row['country_code'] for row in data_list)
+        years = [row['year'] for row in data_list]
+        print(f"\n조회 결과: {len(data_list)}건")
+        print(f"국가 수: {len(countries)}")
+        print(f"연도 범위: {min(years)} ~ {max(years)}")
+
+        # 테이블 형식 출력
+        print("\n" + "-" * 70)
+        print(f"{'no':>5}  {'year':>6}  {'country_code':>12}  {'indicator':>20}  {'capital_stock':>20}")
+        print("-" * 70)
+        for idx, row in enumerate(data_list, 1):
+            print(f"{idx:>5}  {row['year']:>6}  {row['country_code']:>12}  {row['indicator']:>20}  {row['capital_stock']:>20,}")
     else:
         print("\n데이터 없음")
 
+    # DRY RUN: API 요청 저장 안함
     print("\n" + "=" * 60)
     print("[DRY RUN] 완료 - DB 저장 없음")
     print("=" * 60)
 
-    return df
+    return data_list
 
 
-def test_mode():
-    """테스트 모드 - 미국 데이터만 DB 저장 (2015년 이후)"""
+def test_mode(year=None, country=None):
+    """테스트 모드 - DB 저장 (test_market_capital_stock)"""
     setup_logger()
-    batch_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+    batch_id = "t_" + datetime.now().strftime('%Y%m%d_%H%M%S')
 
     print("\n" + "=" * 60)
     print("Market 10대 인자 - 자본스톡 [TEST MODE]")
     print("=" * 60)
     print(f"배치 ID: {batch_id}")
-    print("대상: 미국(USA), 2015년 이후")
+
+    # 연도 설정
+    start_year, end_year, year_text = parse_year_input(year)
+    # 국가 설정
+    country_codes, country_text = parse_country_input(country)
+    print(f"대상: {country_text}, {year_text}")
     print()
 
     client = IMFCapitalStockClient()
 
-    # 자본스톡 데이터 조회 (미국, 2015년 이후)
-    print_log("INFO", "자본스톡 데이터 조회 (미국, 2015~최신)...")
+    print_log("INFO", f"자본스톡 데이터 조회...")
 
-    df = client.get_capital_stock_data(
-        country_codes=['USA'],
-        start_year=2015,
-        end_year=None
+    request_url, response_json, data_list = client.get_capital_stock_data(
+        country_codes=country_codes,
+        start_year=start_year,
+        end_year=end_year
     )
 
-    if df is not None and len(df) > 0:
-        print(f"\nDataFrame shape: {df.shape}")
-        print(f"컬럼: {list(df.columns)}")
-        print()
-        print(df.to_string())
+    # API 요청/응답 저장
+    save_api_request('capital_stock', batch_id, request_url, response_json)
+
+    if data_list and len(data_list) > 0:
+        # 데이터 통계
+        countries = set(row['country_code'] for row in data_list)
+        years = [row['year'] for row in data_list]
+        print(f"\n조회 결과: {len(data_list)}건")
+        print(f"국가 수: {len(countries)}")
+        print(f"연도 범위: {min(years)} ~ {max(years)}")
+
+        # 테이블 형식 출력
+        print("\n" + "-" * 70)
+        print(f"{'no':>5}  {'year':>6}  {'country_code':>12}  {'indicator':>20}  {'capital_stock':>20}")
+        print("-" * 70)
+        for idx, row in enumerate(data_list, 1):
+            print(f"{idx:>5}  {row['year']:>6}  {row['country_code']:>12}  {row['indicator']:>20}  {row['capital_stock']:>20,}")
 
         # DB 저장 (테스트 테이블)
-        saved = save_to_db(df, batch_id, table_name='test_market_capital_stock')
-        if saved:
-            print_log("INFO", f"DB 저장 완료: {len(df)}건")
-        else:
-            print_log("ERROR", "DB 저장 실패")
+        save_to_db(data_list, batch_id, table_name='test_market_capital_stock')
     else:
         print("\n데이터 없음")
 
@@ -387,11 +591,11 @@ def test_mode():
     print("[TEST MODE] 완료")
     print("=" * 60)
 
-    return df
+    return data_list
 
 
-def main():
-    """운영 모드 - 모든 국가 전체 연도"""
+def main(year=None, country=None):
+    """운영 모드 - DB 저장 (market_capital_stock)"""
     setup_logger()
     batch_id = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -399,36 +603,44 @@ def main():
     print("Market 10대 인자 - 자본스톡 [운영 모드]")
     print("=" * 60)
     print(f"배치 ID: {batch_id}")
-    print("대상: 전체 국가, 전체 연도")
+
+    # 연도 설정
+    start_year, end_year, year_text = parse_year_input(year)
+    # 국가 설정
+    country_codes, country_text = parse_country_input(country)
+    print(f"대상: {country_text}, {year_text}")
     print()
 
     client = IMFCapitalStockClient()
 
-    # 전체 국가 자본스톡 데이터 조회 (전체 연도)
-    print_log("INFO", "자본스톡 데이터 조회 (전체 국가, 전체 연도)...")
+    print_log("INFO", f"자본스톡 데이터 조회...")
 
-    df = client.get_capital_stock_data(
-        country_codes='all',  # 전체 국가
-        start_year=None,      # 전체 연도
-        end_year=None
+    request_url, response_json, data_list = client.get_capital_stock_data(
+        country_codes=country_codes,
+        start_year=start_year,
+        end_year=end_year
     )
 
-    if df is not None and len(df) > 0:
-        print(f"\nDataFrame shape: {df.shape}")
-        print(f"컬럼: {list(df.columns)}")
-        print(f"\n국가 수: {df['country'].nunique()}")
-        print(f"연도 범위: {df['year'].min()} ~ {df['year'].max()}")
+    # API 요청/응답 저장
+    save_api_request('capital_stock', batch_id, request_url, response_json)
 
-        # 샘플 출력 (처음 20건)
-        print("\n[샘플 데이터 - 처음 20건]")
-        print(df.head(20).to_string())
+    if data_list and len(data_list) > 0:
+        # 데이터 통계
+        countries = set(row['country_code'] for row in data_list)
+        years = [row['year'] for row in data_list]
+        print(f"\n조회 결과: {len(data_list)}건")
+        print(f"국가 수: {len(countries)}")
+        print(f"연도 범위: {min(years)} ~ {max(years)}")
+
+        # 테이블 형식 출력
+        print("\n" + "-" * 70)
+        print(f"{'no':>5}  {'year':>6}  {'country_code':>12}  {'indicator':>20}  {'capital_stock':>20}")
+        print("-" * 70)
+        for idx, row in enumerate(data_list, 1):
+            print(f"{idx:>5}  {row['year']:>6}  {row['country_code']:>12}  {row['indicator']:>20}  {row['capital_stock']:>20,}")
 
         # DB 저장 (운영 테이블)
-        saved = save_to_db(df, batch_id, table_name='market_capital_stock')
-        if saved:
-            print_log("INFO", f"DB 저장 완료: {len(df)}건")
-        else:
-            print_log("ERROR", "DB 저장 실패")
+        save_to_db(data_list, batch_id, table_name='market_capital_stock')
     else:
         print("\n데이터 없음")
 
@@ -436,25 +648,21 @@ def main():
     print("[운영 모드] 완료")
     print("=" * 60)
 
-    return df
+    return data_list
 
 
-def save_to_db(df, batch_id, table_name='market_capital_stock'):
-    """DataFrame을 DB에 저장
+def save_to_db(data_list, batch_id, table_name='market_capital_stock'):
+    """데이터 리스트를 DB에 저장
 
     Args:
-        df: 저장할 DataFrame
+        data_list: 저장할 데이터 리스트
         batch_id: 배치 ID
         table_name: 테이블명 (기본값: market_capital_stock)
 
-    테이블 컬럼: year, country_code, capital_stock, batch_id, created_at
+    테이블 컬럼: year, country_code, indicator, frequency, capital_stock, batch_id, created_at
 
     Note:
-        capital_stock = 민간(CAPSTCK_PS_Q_PU_RY2017) + 정부(CAPSTCK_S13_Q_PU_RY2017)
-        단위: Billions of 2017 PPP international dollars (10억 달러)
-        국가명은 market_capital_stock_country 테이블에서 조인하여 조회
-
-        매년 전체 데이터를 새로 저장하는 방식 (중복 허용)
+        year + country_code + indicator 기준 중복 체크, 존재하면 SKIP
     """
     try:
         import psycopg2
@@ -466,29 +674,48 @@ def save_to_db(df, batch_id, table_name='market_capital_stock'):
         # 실행 서버 시간 (API 응답 수신 시점)
         created_at = datetime.now()
 
-        for _, row in df.iterrows():
-            country_code = row['country']
+        insert_count = 0
+        skip_count = 0
 
-            # 단순 INSERT (매년 전체 데이터 새로 저장)
+        for row in data_list:
+            year_val = row['year']
+            country_code = row['country_code']
+            indicator = row['indicator']
+
+            # 중복 체크 (year + country_code + indicator)
+            cursor.execute(f"""
+                SELECT 1 FROM {table_name}
+                WHERE year = %s AND country_code = %s AND indicator = %s
+                LIMIT 1
+            """, (year_val, country_code, indicator))
+
+            if cursor.fetchone():
+                skip_count += 1
+                continue
+
+            # INSERT
             query = f"""
                 INSERT INTO {table_name}
-                    (year, country_code, capital_stock, batch_id, created_at)
-                VALUES (%s, %s, %s, %s, %s)
+                    (year, country_code, indicator, frequency, capital_stock, batch_id, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """
 
             cursor.execute(query, (
-                int(row['year']),
+                year_val,
                 country_code,
-                row.get('capital_stock'),
+                indicator,
+                row['frequency'],
+                row['capital_stock'],
                 batch_id,
                 created_at
             ))
+            insert_count += 1
 
         conn.commit()
         cursor.close()
         conn.close()
 
-        print_log("INFO", f"DB 저장 완료 ({table_name}): {len(df)}건")
+        print_log("INFO", f"DB 저장 완료 ({table_name}): INSERT {insert_count}건, SKIP {skip_count}건")
         return True
 
     except Exception as e:
@@ -498,41 +725,95 @@ def save_to_db(df, batch_id, table_name='market_capital_stock'):
 
 
 if __name__ == "__main__":
-    import msvcrt
     import time
+
+    def select_mode_with_timeout(timeout=10):
+        """모드 선택 (타임아웃 지원, Windows/Linux 호환)"""
+        if sys.platform == 'win32':
+            import msvcrt
+            print("모드 선택 (10초 대기): ", end='', flush=True)
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                if msvcrt.kbhit():
+                    char = msvcrt.getwch()
+                    if char == '\r':
+                        print()
+                        return ''
+                    print(char)
+                    return char.lower()
+                time.sleep(0.1)
+            print("\n시간 초과 - 운영 모드 자동 실행")
+            return ''
+        else:
+            import select
+            print(f"모드 선택 ({timeout}초 대기): ", end='', flush=True)
+            ready, _, _ = select.select([sys.stdin], [], [], timeout)
+            if ready:
+                value = sys.stdin.readline().strip().lower()
+                return value if value else ''
+            else:
+                print("\n시간 초과 - 운영 모드 자동 실행")
+                return ''
+
+    default_year = get_previous_year()
 
     print("\n[모드 선택] (10초 후 자동으로 운영모드 실행)")
     print("  d: DRY RUN (API 응답 확인, DB 저장 없음)")
-    print("  t: TEST MODE (미국만, 2015년 이후, test_market_capital_stock)")
-    print("  엔터: 운영 모드 (전체 국가, 전체 연도, market_capital_stock)")
+    print("  t: TEST MODE (test_market_capital_stock)")
+    print("  엔터: 운영 모드 (전체 국가, market_capital_stock)")
     print()
 
     # 10초 타임아웃으로 입력 대기
-    mode = ''
-    print("모드 선택 (10초 대기): ", end='', flush=True)
-    start_time = time.time()
-    while time.time() - start_time < 10:
-        if msvcrt.kbhit():
-            char = msvcrt.getwch()
-            if char == '\r':  # Enter
-                print()
-                break
-            mode = char.lower()
-            print(char)
-            break
-        time.sleep(0.1)
-    else:
-        print("\n시간 초과 - 운영 모드 자동 실행")
+    mode = select_mode_with_timeout(10)
 
     try:
         if mode == 'd':
-            dry_run()
+            # 국가 선택
+            print(f"\n[국가 선택] (10초 후 전체 국가)")
+            print(f"  USA: 단일 국가")
+            print(f"  USA,KOR,JPN: 여러 국가 (쉼표 구분)")
+            print(f"  엔터: 전체 국가")
+            country = input_with_timeout("국가 입력", timeout=10)
+            # 연도 선택
+            print(f"\n[연도 선택] (10초 후 {default_year}년 자동 실행)")
+            print(f"  2023: 단일 연도 조회")
+            print(f"  2015-2020: 범위 조회")
+            print(f"  all: 전체 연도 조회")
+            print(f"  엔터: {default_year}년 (전년도)")
+            year = input_with_timeout("연도 입력", timeout=10)
+            dry_run(year, country)
             input("\n엔터키를 누르면 종료합니다...")
         elif mode == 't':
-            test_mode()
+            # 국가 선택
+            print(f"\n[국가 선택] (10초 후 전체 국가)")
+            print(f"  USA: 단일 국가")
+            print(f"  USA,KOR,JPN: 여러 국가 (쉼표 구분)")
+            print(f"  엔터: 전체 국가")
+            country = input_with_timeout("국가 입력", timeout=10)
+            # 연도 선택
+            print(f"\n[연도 선택] (10초 후 {default_year}년 자동 실행)")
+            print(f"  2023: 단일 연도 조회")
+            print(f"  2015-2020: 범위 조회")
+            print(f"  all: 전체 연도 조회")
+            print(f"  엔터: {default_year}년 (전년도)")
+            year = input_with_timeout("연도 입력", timeout=10)
+            test_mode(year, country)
             input("\n엔터키를 누르면 종료합니다...")
         else:
-            results = main()
+            # 국가 선택
+            print(f"\n[국가 선택] (10초 후 전체 국가)")
+            print(f"  USA: 단일 국가")
+            print(f"  USA,KOR,JPN: 여러 국가 (쉼표 구분)")
+            print(f"  엔터: 전체 국가")
+            country = input_with_timeout("국가 입력", timeout=10)
+            # 연도 선택
+            print(f"\n[연도 선택] (10초 후 {default_year}년 자동 실행)")
+            print(f"  2023: 단일 연도 조회")
+            print(f"  2015-2020: 범위 조회")
+            print(f"  all: 전체 연도 조회")
+            print(f"  엔터: {default_year}년 (전년도)")
+            year = input_with_timeout("연도 입력", timeout=10)
+            results = main(year, country)
             # 운영모드는 자동 종료 (input 없음)
     except Exception as e:
         print(f"\n[ERROR] 예외 발생: {e}")
