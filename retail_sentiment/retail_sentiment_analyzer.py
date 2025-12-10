@@ -211,8 +211,8 @@ class OpenAIClient:
         """DB에서 템플릿 조회"""
         try:
             query = """
-                SELECT id, question_template
-                FROM openai_question_templates
+                SELECT id, template
+                FROM market_openai_templates
                 WHERE template_name = %s AND is_active = true
                 LIMIT 1
             """

@@ -306,8 +306,8 @@ class OpenAIClient:
         """DB에서 템플릿 조회"""
         try:
             query = """
-                SELECT id, question_template
-                FROM openai_question_templates
+                SELECT id, template
+                FROM market_openai_templates
                 WHERE template_name = %s AND is_active = true
                 LIMIT 1
             """
@@ -921,13 +921,21 @@ class EventDateAnalyzer:
 
     def save_event_result(self, result_data, calendar_week, comp_brand, response_json=None):
         """이벤트 분석 결과 저장"""
+        # rumor_based 필드 추출
+        rumor_based = result_data.get('rumor_based', {})
+        rumor_release_window = rumor_based.get('rumor_release_window') if rumor_based else None
+        rumor_preorder_window = rumor_based.get('rumor_preorder_window') if rumor_based else None
+        rumor_main_sources = rumor_based.get('main_sources') if rumor_based else None
+        rumor_confidence_level = rumor_based.get('confidence_level') if rumor_based else None
+
         insert_query = f"""
             INSERT INTO {self.event_table_name} (
                 country, comp_brand, comp_sku_name, comp_launch_date, comp_preorder,
                 comp_pre_order_start_date, comp_preorder_end_date,
+                rumor_release_window, rumor_preorder_window, rumor_main_sources, rumor_confidence_level,
                 calender_week, created_at, batch_id, response_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         try:
             self.db.cursor.execute(insert_query, (
@@ -938,6 +946,10 @@ class EventDateAnalyzer:
                 result_data.get('comp_preorder'),
                 result_data.get('comp_pre_order_start_date'),
                 result_data.get('comp_preorder_end_date'),
+                rumor_release_window,
+                rumor_preorder_window,
+                rumor_main_sources,
+                rumor_confidence_level,
                 calendar_week,
                 result_data.get('created_at'),
                 self.batch_id,
@@ -1152,5 +1164,4 @@ if __name__ == "__main__":
             batch_id=batch_id
         )
         event_analyzer.run()
-
-        input("\n엔터키를 누르면 종료합니다...")
+        # 운영모드는 자동 종료
