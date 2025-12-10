@@ -95,7 +95,7 @@ class OECDPotentialGDPClient:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
 
-    def get_potential_gdp_data(self, country_codes=None, start_year=None, end_year=None):
+    def get_potential_gdp_data(self, country_codes=None, start_year=None, end_year=None, scenarios=None):
         """
         잠재적 산출량 데이터 조회
 
@@ -103,6 +103,7 @@ class OECDPotentialGDPClient:
             country_codes: 국가 코드 리스트 또는 문자열 (예: ['USA', 'KOR'] 또는 'USA' 또는 None=전체)
             start_year: 시작 연도
             end_year: 종료 연도
+            scenarios: 시나리오 코드 리스트 (예: ['BAU1', 'ET1'] 또는 None=전체)
 
         Returns:
             tuple: (request_url, response_text, data_list)
@@ -116,9 +117,14 @@ class OECDPotentialGDPClient:
             else:
                 country_key = country_codes
 
-            # 키 구성: 국가.지표.measure.빈도
-            # measure는 빈칸 (기본값 사용)
-            key = f"{country_key}.{self.INDICATOR}..{self.FREQUENCY}"
+            # 시나리오 처리
+            if scenarios and isinstance(scenarios, list):
+                scenario_key = '+'.join(scenarios)
+            else:
+                scenario_key = ''  # 전체 시나리오
+
+            # 키 구성: 국가.지표.시나리오.빈도
+            key = f"{country_key}.{self.INDICATOR}.{scenario_key}.{self.FREQUENCY}"
 
             # URL 구성
             url = f"{self.BASE_URL}/{self.DEFAULT_DATAFLOW}/{key}"
@@ -352,7 +358,36 @@ def parse_country_input(country_input):
     return codes, ','.join(codes)
 
 
-def dry_run(year=None, country=None):
+def parse_scenario_input(scenario_input):
+    """시나리오 입력 파싱
+
+    Args:
+        scenario_input: 시나리오 입력값
+            - None/빈값: 전체 시나리오
+            - 'BAU1': 단일 시나리오
+            - 'BAU1,ET1': 여러 시나리오 (쉼표 구분)
+
+    Returns:
+        tuple: (scenarios, display_text)
+            - scenarios: None (전체) 또는 리스트
+    """
+    if not scenario_input:
+        return None, "전체 시나리오"
+
+    # 쉼표로 구분된 시나리오 코드
+    codes = [c.strip().upper() for c in scenario_input.split(',')]
+    codes = [c for c in codes if c]  # 빈 값 제거
+
+    if not codes:
+        return None, "전체 시나리오"
+
+    if len(codes) == 1:
+        return codes, codes[0]
+
+    return codes, ','.join(codes)
+
+
+def dry_run(year=None, country=None, scenario=None):
     """드라이 모드 - API 응답값 확인 - DB 저장 없음"""
     setup_logger()
     batch_id = "t_" + datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -366,7 +401,9 @@ def dry_run(year=None, country=None):
     start_year, end_year, year_text = parse_year_input(year)
     # 국가 설정
     country_codes, country_text = parse_country_input(country)
-    print(f"대상: {country_text}, {year_text}")
+    # 시나리오 설정
+    scenarios, scenario_text = parse_scenario_input(scenario)
+    print(f"대상: {country_text}, {year_text}, {scenario_text}")
     print()
 
     client = OECDPotentialGDPClient()
@@ -376,7 +413,8 @@ def dry_run(year=None, country=None):
     _, _, data_list = client.get_potential_gdp_data(
         country_codes=country_codes,
         start_year=start_year,
-        end_year=end_year
+        end_year=end_year,
+        scenarios=scenarios
     )
 
     if data_list and len(data_list) > 0:
@@ -413,7 +451,7 @@ def dry_run(year=None, country=None):
     return data_list
 
 
-def test_mode(year=None, country=None):
+def test_mode(year=None, country=None, scenario=None):
     """테스트 모드 - DB 저장 (test_market_potential_gdp)"""
     setup_logger()
     batch_id = "t_" + datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -427,7 +465,9 @@ def test_mode(year=None, country=None):
     start_year, end_year, year_text = parse_year_input(year)
     # 국가 설정
     country_codes, country_text = parse_country_input(country)
-    print(f"대상: {country_text}, {year_text}")
+    # 시나리오 설정
+    scenarios, scenario_text = parse_scenario_input(scenario)
+    print(f"대상: {country_text}, {year_text}, {scenario_text}")
     print()
 
     client = OECDPotentialGDPClient()
@@ -437,7 +477,8 @@ def test_mode(year=None, country=None):
     request_url, response_text, data_list = client.get_potential_gdp_data(
         country_codes=country_codes,
         start_year=start_year,
-        end_year=end_year
+        end_year=end_year,
+        scenarios=scenarios
     )
 
     # API 요청/응답 저장
@@ -472,7 +513,7 @@ def test_mode(year=None, country=None):
     return data_list
 
 
-def main(year=None, country=None):
+def main(year=None, country=None, scenario=None):
     """운영 모드 - DB 저장 (market_potential_gdp)"""
     setup_logger()
     batch_id = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -486,7 +527,9 @@ def main(year=None, country=None):
     start_year, end_year, year_text = parse_year_input(year)
     # 국가 설정
     country_codes, country_text = parse_country_input(country)
-    print(f"대상: {country_text}, {year_text}")
+    # 시나리오 설정
+    scenarios, scenario_text = parse_scenario_input(scenario)
+    print(f"대상: {country_text}, {year_text}, {scenario_text}")
     print()
 
     client = OECDPotentialGDPClient()
@@ -496,7 +539,8 @@ def main(year=None, country=None):
     request_url, response_text, data_list = client.get_potential_gdp_data(
         country_codes=country_codes,
         start_year=start_year,
-        end_year=end_year
+        end_year=end_year,
+        scenarios=scenarios
     )
 
     # API 요청/응답 저장
@@ -634,7 +678,13 @@ if __name__ == "__main__":
             print(f"  all: 전체 연도 조회")
             print(f"  엔터: 2026~2030년 (기본값)")
             year = input_with_timeout("연도 입력", timeout=10)
-            dry_run(year, country)
+            # 시나리오 선택
+            print(f"\n[시나리오 선택] (10초 후 전체 시나리오)")
+            print(f"  BAU1: 단일 시나리오")
+            print(f"  BAU1,BAU2,ET1,ET2,ET3,ET4: 여러 시나리오 (쉼표 구분)")
+            print(f"  엔터: 전체 시나리오")
+            scenario = input_with_timeout("시나리오 입력", timeout=10)
+            dry_run(year, country, scenario)
             input("\n엔터키를 누르면 종료합니다...")
         elif mode == 't':
             # 국가 선택
@@ -650,7 +700,13 @@ if __name__ == "__main__":
             print(f"  all: 전체 연도 조회")
             print(f"  엔터: 2026~2030년 (기본값)")
             year = input_with_timeout("연도 입력", timeout=10)
-            test_mode(year, country)
+            # 시나리오 선택
+            print(f"\n[시나리오 선택] (10초 후 전체 시나리오)")
+            print(f"  BAU1: 단일 시나리오")
+            print(f"  BAU1,BAU2,ET1: 여러 시나리오 (쉼표 구분)")
+            print(f"  엔터: 전체 시나리오")
+            scenario = input_with_timeout("시나리오 입력", timeout=10)
+            test_mode(year, country, scenario)
             input("\n엔터키를 누르면 종료합니다...")
         else:
             # 국가 선택
@@ -666,7 +722,13 @@ if __name__ == "__main__":
             print(f"  all: 전체 연도 조회")
             print(f"  엔터: 2026~2030년 (기본값)")
             year = input_with_timeout("연도 입력", timeout=10)
-            results = main(year, country)
+            # 시나리오 선택
+            print(f"\n[시나리오 선택] (10초 후 전체 시나리오)")
+            print(f"  BAU1: 단일 시나리오")
+            print(f"  BAU1,BAU2,ET1: 여러 시나리오 (쉼표 구분)")
+            print(f"  엔터: 전체 시나리오")
+            scenario = input_with_timeout("시나리오 입력", timeout=10)
+            results = main(year, country, scenario)
             # 운영모드는 자동 종료 (input 없음)
     except Exception as e:
         print(f"\n[ERROR] 예외 발생: {e}")
