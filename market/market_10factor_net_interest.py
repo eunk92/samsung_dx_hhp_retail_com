@@ -72,7 +72,7 @@ class IMFNetInterestClient:
     BASE_URL = "https://api.imf.org/external/sdmx/3.0"
     DATAFLOW = "IMF.STA/FSIBSIS"
     SECTOR = "S12CFSI"
-    INDICATOR = "NINTINC_USD"
+    INDICATOR = "NINTINC_XDC"
 
     def __init__(self):
         self.session = requests.Session()
@@ -113,9 +113,21 @@ class IMFNetInterestClient:
         }
 
         # 기간 설정 (c 파라미터로 TIME_PERIOD 필터링)
+        # 입력 형식: 2023 (연도) / 2023-Q1 (단일 분기) / 2023-Q1~2023-Q4 (범위)
         if period and period.lower() != 'all':
-            params['c[TIME_PERIOD]'] = period
-            print_log("INFO", f"기간 필터: {period}")
+            if '~' in period:
+                # 범위: 2023-Q1~2023-Q4 → ge:2023-Q1+le:2023-Q4
+                start_period, end_period = period.split('~')
+                params['c[TIME_PERIOD]'] = f'ge:{start_period.strip()}+le:{end_period.strip()}'
+                print_log("INFO", f"기간 필터: {start_period.strip()} ~ {end_period.strip()}")
+            elif period.isdigit() and len(period) == 4:
+                # 연도만: 2023 → ge:2023-Q1+le:2023-Q4
+                params['c[TIME_PERIOD]'] = f'ge:{period}-Q1+le:{period}-Q4'
+                print_log("INFO", f"기간 필터: {period}-Q1 ~ {period}-Q4")
+            else:
+                # 단일 분기: 2023-Q1
+                params['c[TIME_PERIOD]'] = period
+                print_log("INFO", f"기간 필터: {period}")
 
         print_log("INFO", f"API 요청: {url}")
         print_log("INFO", f"파라미터: {params}")
@@ -181,7 +193,7 @@ class IMFNetInterestClient:
                         sector_codes = [v.get('id') for v in values]
                     elif dim_id == 'INDICATOR':
                         indicator_codes = [v.get('id') for v in values]
-                    elif dim_id == 'FREQ':
+                    elif dim_id in ('FREQ', 'FREQUENCY'):
                         frequency_codes = [v.get('id') for v in values]
 
                 # observation dimensions에서 시간 기간 추출
@@ -191,26 +203,34 @@ class IMFNetInterestClient:
                         time_periods = [v.get('value') for v in dim.get('values', [])]
                         break
 
-            # 관측값 추출
+            # 관측값 추출 (최적화: 리스트 컴프리헨션 + 캐싱)
+            country_len = len(country_codes)
+            sector_len = len(sector_codes)
+            indicator_len = len(indicator_codes)
+            freq_len = len(frequency_codes)
+            period_len = len(time_periods)
+
             for dataset in datasets:
                 series = dataset.get('series', {})
                 for series_key, series_data in series.items():
-                    # series_key에서 인덱스 추출 (예: "0:0:0:0" -> country:sector:indicator:freq)
+                    # series_key에서 인덱스 추출
                     key_parts = series_key.split(':')
-                    country_idx = int(key_parts[0]) if len(key_parts) > 0 else 0
+                    country_idx = int(key_parts[0]) if key_parts else 0
                     sector_idx = int(key_parts[1]) if len(key_parts) > 1 else 0
                     indicator_idx = int(key_parts[2]) if len(key_parts) > 2 else 0
                     freq_idx = int(key_parts[3]) if len(key_parts) > 3 else 0
 
-                    country_code = country_codes[country_idx] if country_idx < len(country_codes) else 'UNKNOWN'
-                    sector = sector_codes[sector_idx] if sector_idx < len(sector_codes) else self.SECTOR
-                    indicator = indicator_codes[indicator_idx] if indicator_idx < len(indicator_codes) else self.INDICATOR
-                    frequency = frequency_codes[freq_idx] if freq_idx < len(frequency_codes) else 'Q'
+                    # 시리즈 공통 값 캐싱
+                    country_code = country_codes[country_idx] if country_idx < country_len else 'UNKNOWN'
+                    sector = sector_codes[sector_idx] if sector_idx < sector_len else self.SECTOR
+                    indicator = indicator_codes[indicator_idx] if indicator_idx < indicator_len else self.INDICATOR
+                    frequency = frequency_codes[freq_idx] if freq_idx < freq_len else 'Q'
 
+                    # 관측값 일괄 처리
                     observations = series_data.get('observations', {})
                     for idx_str, value_list in observations.items():
                         idx = int(idx_str)
-                        if idx < len(time_periods) and value_list:
+                        if idx < period_len and value_list:
                             results.append({
                                 'country_code': country_code,
                                 'sector': sector,
@@ -220,8 +240,8 @@ class IMFNetInterestClient:
                                 'value': float(value_list[0])
                             })
 
-            # 국가, 기간 순 정렬
-            results.sort(key=lambda x: (x['country_code'], x['period']))
+            # 국가, indicator, 기간 순 정렬
+            results.sort(key=lambda x: (x['country_code'], x['indicator'], x['period']))
             print_log("INFO", f"파싱 완료: {len(results)}건")
 
         except Exception as e:
@@ -253,7 +273,7 @@ class IMFNetInterestClient:
 # ============================================================================
 
 def save_to_db(results, batch_id, table_name='market_net_interest'):
-    """DB 저장 (period + country_code 중복 시 skip)"""
+    """DB 저장 (period + country_code + indicator 중복 시 skip)"""
     if not results:
         print_log("WARNING", "저장할 데이터 없음")
         return False
@@ -270,11 +290,11 @@ def save_to_db(results, batch_id, table_name='market_net_interest'):
         skipped = 0
 
         for row in results:
-            # 중복 체크
+            # 중복 체크 (period + country_code + indicator)
             cursor.execute(f"""
                 SELECT 1 FROM {table_name}
-                WHERE period = %s AND country_code = %s
-            """, (row['period'], row['country_code']))
+                WHERE period = %s AND country_code = %s AND indicator = %s
+            """, (row['period'], row['country_code'], row.get('indicator')))
 
             if cursor.fetchone():
                 skipped += 1
@@ -356,6 +376,29 @@ def get_current_quarter():
     return f"{now.year}-Q{quarter}"
 
 
+def get_previous_quarters():
+    """전전분기 ~ 전분기 기간 반환 (예: 2024-Q3~2024-Q4)"""
+    now = datetime.now()
+    year = now.year
+    quarter = (now.month - 1) // 3 + 1
+
+    # 전분기 계산
+    prev_q = quarter - 1
+    prev_year = year
+    if prev_q <= 0:
+        prev_q = 4
+        prev_year = year - 1
+
+    # 전전분기 계산
+    prev_prev_q = prev_q - 1
+    prev_prev_year = prev_year
+    if prev_prev_q <= 0:
+        prev_prev_q = 4
+        prev_prev_year = prev_year - 1
+
+    return f"{prev_prev_year}-Q{prev_prev_q}~{prev_year}-Q{prev_q}"
+
+
 def input_with_timeout(prompt, timeout=10):
     """타임아웃 지원 입력"""
     print(f"{prompt}: ", end='', flush=True)
@@ -397,7 +440,7 @@ def dry_run():
     print("=" * 60)
     print(f"배치 ID: {batch_id}")
     print("데이터: IMF FSIBSIS (Financial Soundness Indicators)")
-    print("지표: NINTINC_USD (Net Interest Income, USD)")
+    print("지표: NINTINC_XDC (Net Interest Income, Domestic Currency)")
     print("부문: S12CFSI (Other Depository Corporations)")
     print()
 
@@ -406,13 +449,17 @@ def dry_run():
     print("  USA, KOR 등: 특정 국가")
     country = input_with_timeout("국가 입력 (예: USA, all)", timeout=30)
     if not country:
-        country = 'USA'
+        country = 'all'
     print(f"선택된 국가: {country}")
 
     # 기간 선택
-    period = input_with_timeout("기간 입력 (예: 2024-Q1, all)", timeout=30)
+    default_period = get_previous_quarters()
+    print(f"  2024-Q1~2024-Q4: 범위 조회")
+    print(f"  2024-Q1: 특정 분기")
+    print(f"  엔터: {default_period}")
+    period = input_with_timeout(f"기간 입력", timeout=30)
     if not period:
-        period = 'all'
+        period = default_period
     print(f"선택된 기간: {period}")
 
     client = IMFNetInterestClient()
@@ -423,7 +470,7 @@ def dry_run():
         print(f"\n조회 결과: {len(results)}건")
         print("-" * 50)
         for row in results:
-            print(f"  [{row['country_code']}] {row['period']}: {row['value']}")
+            print(f"  [{row['country_code']}] [{row['indicator']}] {row['period']}: {row['value']}")
     else:
         print("\n데이터 없음")
 
@@ -448,13 +495,17 @@ def test_mode():
     print("  USA, KOR 등: 특정 국가")
     country = input_with_timeout("국가 입력 (예: USA, all)", timeout=30)
     if not country:
-        country = 'USA'
+        country = 'all'
     print(f"선택된 국가: {country}")
 
     # 기간 선택
-    period = input_with_timeout("기간 입력 (예: 2024-Q1, all)", timeout=30)
+    default_period = get_previous_quarters()
+    print(f"  2024-Q1~2024-Q4: 범위 조회")
+    print(f"  2024-Q1: 특정 분기")
+    print(f"  엔터: {default_period}")
+    period = input_with_timeout(f"기간 입력", timeout=30)
     if not period:
-        period = 'all'
+        period = default_period
     print(f"선택된 기간: {period}")
 
     client = IMFNetInterestClient()
@@ -490,12 +541,10 @@ def main(country=None, period=None):
         country = 'all'
     print(f"국가: {country.upper() if country.lower() != 'all' else '전체'}")
 
-    # 기간 설정 (기본값: 현재 분기)
+    # 기간 설정 (기본값: 전전분기~전분기)
     if not period:
-        period = get_current_quarter()
-        print(f"기간: {period} (현재 분기)")
-    elif period.lower() == 'all':
-        print("기간: 전체")
+        period = get_previous_quarters()
+        print(f"기간: {period} (전전분기~전분기)")
     else:
         print(f"기간: {period}")
     print()
@@ -511,7 +560,7 @@ def main(country=None, period=None):
         print(f"\n조회 결과: {len(results)}건")
         print("-" * 50)
         for row in results:
-            print(f"  [{row['country_code']}] {row['period']}: {row['value']}")
+            print(f"  [{row['country_code']}] [{row['indicator']}] {row['period']}: {row['value']}")
         save_to_db(results, batch_id, table_name='market_net_interest')
     else:
         print("\n데이터 없음")
@@ -555,17 +604,18 @@ if __name__ == "__main__":
             test_mode()
             input("\n엔터키를 누르면 종료합니다...")
         else:
-            # 운영 모드: 국가/기간 입력 (타임아웃 시 전체 국가, 현재 분기)
+            # 운영 모드: 국가/기간 입력 (타임아웃 시 전체 국가, 전전분기~전분기)
             print("\n[국가 선택] (10초 후 전체 국가로 자동 실행)")
             print("  all 또는 엔터: 전체 국가")
             print("  USA, KOR 등: 특정 국가")
             country = input_with_timeout("국가 입력 (예: USA, all)", timeout=10)
 
-            print("\n[기간 선택] (10초 후 현재 분기로 자동 실행)")
-            print("  all: 전체 데이터")
+            default_period = get_previous_quarters()
+            print(f"\n[기간 선택] (10초 후 {default_period} 자동 실행)")
+            print("  2024-Q1~2024-Q4: 범위 조회")
             print("  2024-Q1: 특정 분기")
-            print("  엔터: 현재 분기")
-            period = input_with_timeout("기간 입력 (예: 2024-Q1, all)", timeout=10)
+            print(f"  엔터: {default_period}")
+            period = input_with_timeout("기간 입력", timeout=10)
 
             main(country, period)
     except Exception as e:
