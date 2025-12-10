@@ -302,7 +302,6 @@ class OpenAIClient:
                 cost_usd
             ))
             self.db.commit()
-            print_log("INFO", f"  -> 요청/응답 저장 완료 (market_openai_request)")
         except Exception as e:
             print_log("ERROR", f"요청/응답 저장 실패: {e}")
             self.db.rollback()
@@ -503,7 +502,6 @@ class TVSentimentAnalyzer:
             """
             self.db.execute(query, (retail_com_id, str(sentiment_score), final_interpretation, self.batch_id, datetime.now(), response_text))
             self.db.commit()
-            print_log("INFO", f"  -> 저장 완료 (테이블: {self.target_table})")
         except Exception as e:
             print_log("ERROR", f"저장 실패: {e}")
             self.db.rollback()
@@ -512,12 +510,10 @@ class TVSentimentAnalyzer:
         """단일 제품 감성 분석"""
         try:
             sku_name = product_data.get('Retailer_SKU_Name', 'Unknown')
-            print_log("INFO", f"분석 중: {sku_name[:50]}...")
 
             result = self.openai.analyze(product_data, batch_id=self.batch_id, dry_run=self.dry_run)
 
             if result['success']:
-                print_log("INFO", f"  -> 분석 완료 (토큰: {result['tokens_used']})")
                 return {
                     'success': True,
                     'sku_name': sku_name,
@@ -569,9 +565,9 @@ class TVSentimentAnalyzer:
             total_fail = 0
 
             for idx, row in enumerate(review_data, 1):
-                print_log("INFO", f"[TV] [{idx}/{len(review_data)}]")
-
                 product_data = self.prepare_product_data(row)
+                sku_name = product_data.get('Retailer_SKU_Name', 'Unknown')
+                print_log("INFO", f"[TV] [{idx}/{len(review_data)}] 분석 중: {sku_name[:50]}...")
                 result = self.analyze_single(product_data)
 
                 if result['success']:
@@ -731,7 +727,6 @@ class HHPSentimentAnalyzer:
             """
             self.db.execute(query, (retail_com_id, str(sentiment_score), final_interpretation, self.batch_id, datetime.now(), response_text))
             self.db.commit()
-            print_log("INFO", f"  -> 저장 완료 (테이블: {self.target_table})")
         except Exception as e:
             print_log("ERROR", f"저장 실패: {e}")
             self.db.rollback()
@@ -740,12 +735,10 @@ class HHPSentimentAnalyzer:
         """단일 제품 감성 분석"""
         try:
             sku_name = product_data.get('Retailer_SKU_Name', 'Unknown')
-            print_log("INFO", f"분석 중: {sku_name[:50]}...")
 
             result = self.openai.analyze(product_data, batch_id=self.batch_id, dry_run=self.dry_run)
 
             if result['success']:
-                print_log("INFO", f"  -> 분석 완료 (토큰: {result['tokens_used']})")
                 return {
                     'success': True,
                     'sku_name': sku_name,
@@ -797,9 +790,9 @@ class HHPSentimentAnalyzer:
             total_fail = 0
 
             for idx, row in enumerate(review_data, 1):
-                print_log("INFO", f"[HHP] [{idx}/{len(review_data)}]")
-
                 product_data = self.prepare_product_data(row)
+                sku_name = product_data.get('Retailer_SKU_Name', 'Unknown')
+                print_log("INFO", f"[HHP] [{idx}/{len(review_data)}] 분석 중: {sku_name[:50]}...")
                 result = self.analyze_single(product_data)
 
                 if result['success']:

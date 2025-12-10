@@ -541,7 +541,8 @@ class CompetitorAnalyzer:
                                 'success': True,
                                 'created_at': result.get('response_time')
                             })
-                        print_log("INFO", f"    -> {len(results)}개 경쟁제품 발견")
+                        product_names = [r['comp_sku_name'] for r in results]
+                        print_log("INFO", f"    -> {len(results)}개 경쟁제품 발견 ({', '.join(product_names)})")
                         return results, result['response']
 
                 except (json.JSONDecodeError, TypeError) as e:
@@ -622,13 +623,6 @@ class CompetitorAnalyzer:
         # 고정 카테고리 목록
         CATEGORIES = ['TV', 'HHP']
 
-        # 전체 API 호출 수 계산 (Samsung 제품 수 × 경쟁사 브랜드 수)
-        total_api_calls = sum(
-            len(samsung_by_category.get(cat, [])) * len(comp_by_category.get(cat, []))
-            for cat in CATEGORIES
-        )
-        current_api_call = 0
-
         # 카테고리별로 처리
         for category in CATEGORIES:
             samsung_list = samsung_by_category.get(category, [])
@@ -648,13 +642,11 @@ class CompetitorAnalyzer:
             print_log("INFO", f"{'='*60}")
 
             # 해당 카테고리의 Samsung 제품별로 분석
-            for samsung_keyword in samsung_list:
-                print_log("INFO", f"\n[Samsung] {samsung_keyword}")
+            for idx, samsung_keyword in enumerate(samsung_list, 1):
+                print_log("INFO", f"\n[Samsung {idx}/{len(samsung_list)}] {samsung_keyword}")
 
                 # 각 경쟁사 브랜드별로 개별 API 호출
                 for comp_brand in comp_brands:
-                    current_api_call += 1
-                    print(f"[{current_api_call}/{total_api_calls}] ", end="")
 
                     # Samsung 1개 vs 경쟁사 1개 분석 (결과는 리스트로 반환)
                     results_list, response_json = self.analyze_single_brand(category, samsung_keyword, comp_brand)
