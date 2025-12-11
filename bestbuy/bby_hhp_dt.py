@@ -56,6 +56,17 @@ class BestBuyDetailCrawler(BaseCrawler):
         # batch_id 없으면 개별 실행
         self.standalone = batch_id is None
 
+    def close_survey_popup(self):
+        """설문조사 팝업 감지 및 'No, Thanks' 버튼 클릭"""
+        try:
+            survey_no_button = self.driver.find_element(By.ID, 'survey_invite_no')
+            if survey_no_button.is_displayed():
+                survey_no_button.click()
+                print("[INFO] Survey popup closed")
+                time.sleep(1)
+        except Exception:
+            pass  # 팝업 없으면 무시
+
     def extract_rating(self, text):
         """별점 텍스트에서 숫자 추출 (소수점 포함, 쉼표 제외)"""
         return extract_numeric_value(text, include_comma=False, include_decimal=True)
@@ -68,7 +79,7 @@ class BestBuyDetailCrawler(BaseCrawler):
         """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
         # batch_id 없으면 기본값 사용
         if not self.batch_id:
-            self.batch_id = 'b_20251207_205850'
+            self.batch_id = 't_b_20251211_090712'
 
         if not self.connect_db():
             return False
@@ -159,6 +170,9 @@ class BestBuyDetailCrawler(BaseCrawler):
 
             self.driver.get(product_url)
             time.sleep(random.uniform(8, 12))
+
+            # 설문조사 팝업 닫기
+            self.close_survey_popup()
 
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
