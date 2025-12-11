@@ -307,9 +307,9 @@ class WalmartBSRCrawler(BaseCrawler):
         # 5. 세션 초기화 (example.com → walmart.com → 카테고리)
         self.initialize_session()
 
-        # 6. batch_id 생성
+        # 6. batch_id 생성 (개별 실행 시 test_mode=True)
         if not self.batch_id:
-            self.batch_id = self.generate_batch_id(self.account_name)
+            self.batch_id = self.generate_batch_id(self.account_name, test_mode=True)
 
         # 7. calendar_week 생성 및 로그 정리
         self.calendar_week = self.generate_calendar_week()
