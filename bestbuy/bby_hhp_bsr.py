@@ -70,8 +70,9 @@ class BestBuyBSRCrawler(BaseCrawler):
             return False
         self.setup_driver()
 
+        # batch_id 생성 (개별 실행 시 test_mode=True)
         if not self.batch_id:
-            self.batch_id = self.generate_batch_id(self.account_name)
+            self.batch_id = self.generate_batch_id(self.account_name, test_mode=True)
 
         self.calendar_week = self.generate_calendar_week()
         self.cleanup_old_logs()
