@@ -87,9 +87,9 @@ class AmazonBSRCrawler(BaseCrawler):
             traceback.print_exc()
             return False
 
-        # 5. batch_id 생성
+        # 5. batch_id 생성 (개별 실행 시 test_mode=True)
         if not self.batch_id:
-            self.batch_id = self.generate_batch_id(self.account_name)
+            self.batch_id = self.generate_batch_id(self.account_name, test_mode=True)
 
         # 6. calendar_week 생성 및 로그 정리
         self.calendar_week = self.generate_calendar_week()

@@ -114,7 +114,7 @@ class AmazonIntegratedCrawlerTest:
 
         # batch_id 생성 또는 재사용
         if not self.batch_id:
-            self.batch_id = self.base_crawler.generate_batch_id(self.account_name)
+            self.batch_id = self.base_crawler.generate_batch_id(self.account_name, test_mode=True)
 
         # 로깅 시작 (콘솔 출력을 파일에도 저장)
         log_file = self.base_crawler.start_logging(self.batch_id)

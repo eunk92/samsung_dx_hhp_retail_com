@@ -609,7 +609,7 @@ class BaseCrawler:
             print(f"[WARNING] Failed to extract_join {field_name}: {e}")
             return None
 
-    def generate_batch_id(self, account_name):
+    def generate_batch_id(self, account_name, test_mode=False):
         """
         배치 ID 생성 (쇼핑몰 prefix + 타임스탬프)
 
@@ -619,12 +619,12 @@ class BaseCrawler:
         - 중복 방지 로직에서 사용 (batch_id + product_url 조합)
 
         형식:
-        - Amazon: a_20231120_143045
-        - Bestbuy: b_20231120_143045
-        - Walmart: w_20231120_143045
+        - 운영: a_20231120_143045
+        - 테스트: t_a_20231120_143045
 
         Args:
             account_name (str): 쇼핑몰명 (Amazon, Bestbuy, Walmart)
+            test_mode (bool): 테스트 모드 여부 (True면 t_ prefix 추가)
 
         Returns:
             str: 생성된 배치 ID
@@ -638,6 +638,10 @@ class BaseCrawler:
 
         prefix = prefix_map.get(account_name, 'x_')
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        # 테스트 모드면 t_ prefix 추가
+        if test_mode:
+            return f"t_{prefix}{timestamp}"
 
         return f"{prefix}{timestamp}"
 

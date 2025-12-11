@@ -92,7 +92,7 @@ class AmazonDetailCrawler(BaseCrawler):
         """초기화: batch_id 설정 → DB 연결 → XPath 로드 → WebDriver 설정 → 로그 정리"""
         # 1. batch_id 설정
         if not self.batch_id:
-            self.batch_id = 'a_20251206_154228'
+            self.batch_id = 't_a_20251211_141156'
 
         # 2. DB 연결
         if not self.connect_db():
@@ -195,6 +195,7 @@ class AmazonDetailCrawler(BaseCrawler):
                 FROM amazon_hhp_product_list
                 WHERE account_name = %s AND batch_id = %s AND product_url IS NOT NULL
                 ORDER BY id
+                limit 1
             """
 
             cursor.execute(query, (self.account_name, self.batch_id))
@@ -458,23 +459,47 @@ class AmazonDetailCrawler(BaseCrawler):
             return None
 
     def extract_reviews_from_review_page(self, item, max_reviews=20):
-        """리뷰 페이지에서 리뷰 추출 (현재 미사용, 향후 변경 대비)"""
+        """리뷰 페이지에서 리뷰 추출 - 상세페이지에서 'See more reviews' 버튼 클릭하여 이동"""
         try:
             if not item:
                 return None
 
-            review_url = f"https://www.amazon.com/product-reviews/{item}/ref=cm_cr_dp_d_show_all_btm?ie=UTF8&reviewerType=all_reviews"
+            # 'See more reviews' 버튼 찾기 및 클릭
+            clicked = False
+            try:
+                button = WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, "//a[@data-hook='see-all-reviews-link-foot']"))
+                )
+                # 스크롤하여 버튼이 보이도록
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
+                time.sleep(1)
+                button.click()
+                clicked = True
+                print(f"[INFO] Clicked 'See more reviews' button")
+            except Exception:
+                pass
 
-            self.driver.get(review_url)
+            if not clicked:
+                # 버튼을 찾지 못하면 URL로 직접 이동 (폴백)
+                print(f"[WARNING] 'See more reviews' button not found, using direct URL")
+                review_url = f"https://www.amazon.com/product-reviews/{item}/ref=cm_cr_dp_d_show_all_btm?ie=UTF8&reviewerType=all_reviews"
+                self.driver.get(review_url)
+
             time.sleep(10)
+
+            # Sorry/Robot check 페이지 감지 및 처리
+            if not self.check_and_handle_sorry_page():
+                print(f"[WARNING] Sorry/Robot page could not be resolved")
+                return {'review_count': 0, 'reviews': data_extractor.get_no_reviews_text(self.account_name)}
 
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
 
             page_html_lower = page_html.lower()
             if "couldn't find that page" in page_html_lower or "page not found" in page_html_lower:
-                return None
+                return {'review_count': 0, 'reviews': None}
 
+            review_url = f"https://www.amazon.com/product-reviews/{item}/ref=cm_cr_dp_d_show_all_btm?ie=UTF8&reviewerType=all_reviews"
             current_url = self.driver.current_url
             if 'signin' in current_url or 'ap/signin' in current_url:
                 if self.run_login_and_reload_cookies():
@@ -483,56 +508,78 @@ class AmazonDetailCrawler(BaseCrawler):
                     page_html = self.driver.page_source
                     tree = html.fromstring(page_html)
                     if 'signin' in self.driver.current_url:
-                        return data_extractor.get_no_reviews_text(self.account_name)
+                        return {'review_count': 0, 'reviews': data_extractor.get_no_reviews_text(self.account_name)}
                 else:
-                    return data_extractor.get_no_reviews_text(self.account_name)
+                    return {'review_count': 0, 'reviews': data_extractor.get_no_reviews_text(self.account_name)}
 
-            if 'robot' in page_html.lower() or 'captcha' in page_html.lower():
-                if self.handle_captcha():
-                    self.driver.get(review_url)
-                    time.sleep(5)
-                    page_html = self.driver.page_source
-                    tree = html.fromstring(page_html)
-                    if 'robot' in page_html.lower() or 'captcha' in page_html.lower():
-                        return data_extractor.get_no_reviews_text(self.account_name)
-                else:
-                    return data_extractor.get_no_reviews_text(self.account_name)
+            review_count = None
+            try:
+                review_count_xpath = self.xpaths.get('review_page_count', {}).get('xpath')
+                review_count_texts = tree.xpath(review_count_xpath)
+                for text in review_count_texts:
+                    text = text.strip()
+                    if 'customer review' in text.lower():
+                        match = re.search(r'([\d,]+)\s*customer\s*review', text, re.IGNORECASE)
+                        if match:
+                            review_count = match.group(1)
+                            break
+            except Exception:
+                pass
 
-            review_xpaths = [
-                self.xpaths.get('detailed_review_content', {}).get('xpath') or '',
-                self.xpaths.get('review_fallback_1', {}).get('xpath') or '',
-                self.xpaths.get('review_fallback_2', {}).get('xpath') or '',
-            ]
+            review_container_xpath = self.xpaths.get('review_page_container', {}).get('xpath')
+            review_content_xpath = self.xpaths.get('review_page_content', {}).get('xpath')
+            next_page_xpath = self.xpaths.get('review_page_next_button', {}).get('xpath')
+            
+            cleaned_reviews = []
+            max_pages = 3
 
-            review_texts = []
-            for xpath in review_xpaths:
-                if not xpath:
-                    continue
+            for page_num in range(1, max_pages + 1):
+                review_containers = tree.xpath(review_container_xpath)
+                if not review_containers:
+                    if page_num == 1:
+                        return {'review_count': review_count, 'reviews': data_extractor.get_no_reviews_text(self.account_name)}
+                    break
+
+                for container in review_containers:
+                    if len(cleaned_reviews) >= max_reviews:
+                        break
+                    try:
+                        body_texts = container.xpath(review_content_xpath)
+                        if body_texts:
+                            full_text = ' '.join(t.strip() for t in body_texts if t.strip())
+                            cleaned = ' '.join(full_text.split())
+                            if cleaned:
+                                cleaned_reviews.append(cleaned)
+                    except Exception:
+                        continue
+
+                if len(cleaned_reviews) >= max_reviews:
+                    break
+
                 try:
-                    review_texts = tree.xpath(xpath)
-                    if review_texts:
+                    next_button = self.driver.find_element(By.XPATH, next_page_xpath)
+                    if next_button:
+                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_button)
+                        time.sleep(0.5)
+                        next_button.click()
+                        time.sleep(3)
+                        page_html = self.driver.page_source
+                        tree = html.fromstring(page_html)
+                    else:
                         break
                 except Exception:
-                    continue
+                    break
 
-            if not review_texts:
-                return data_extractor.get_no_reviews_text(self.account_name)
-
-            review_texts = review_texts[:max_reviews]
-
-            cleaned_reviews = []
-            for review in review_texts:
-                if review.strip():
-                    cleaned = ' '.join(review.split())
-                    cleaned_reviews.append(cleaned)
-
-            result = ' ||| '.join(cleaned_reviews)
-            return result
+            if not cleaned_reviews:
+                return {'review_count': review_count, 'reviews': data_extractor.get_no_reviews_text(self.account_name)}
+            numbered_reviews = [f"review{i} - {review}" for i, review in enumerate(cleaned_reviews, 1)]
+            result = ' ||| '.join(numbered_reviews)
+            return {'review_count': review_count, 'reviews': result}
 
         except Exception as e:
             print(f"[ERROR] Review page extraction failed: {e}")
             traceback.print_exc()
-            return None
+            return {'review_count': 0, 'reviews': None}
 
     def crawl_detail(self, product):
         """상세 페이지 크롤링: 페이지 로드 → 필드 추출 → 리뷰 추출 → product_list + detail 데이터 결합"""
@@ -717,50 +764,6 @@ class AmazonDetailCrawler(BaseCrawler):
             rank_1 = self.safe_extract(tree, 'rank_1')
             rank_2 = self.safe_extract(tree, 'rank_2')
 
-            # 리뷰 관련 필드 (최대 3회 재시도)
-            count_of_reviews = None
-            star_rating = None
-            count_of_star_ratings = None
-
-            # "No customer reviews" 텍스트 감지 (tree에서 검색)
-            no_review_keywords = ['no customer reviews', 'no reviews', 'be the first to review']
-            page_text = tree.text_content().lower() if tree is not None else ''
-            is_no_reviews = any(keyword in page_text for keyword in no_review_keywords)
-
-            if is_no_reviews:
-                count_of_reviews = '0'
-                star_rating = 'No customer reviews'
-                count_of_star_ratings = 'No customer reviews'
-            else:
-                for attempt in range(1, MAX_RETRY + 1):
-                    # 첫 시도는 기존 tree 사용, 재시도 시에만 재파싱
-                    if attempt > 1:
-                        page_html = self.driver.page_source
-                        tree = html.fromstring(page_html)
-
-                    if count_of_reviews is None:
-                        count_of_reviews_raw = self.safe_extract(tree, 'count_of_reviews')
-                        count_of_reviews = self.extract_review_count(count_of_reviews_raw)
-                        count_of_star_ratings = count_of_reviews
-
-                    if star_rating is None:
-                        star_rating_raw = self.safe_extract(tree, 'star_rating')
-                        star_rating = self.extract_rating(star_rating_raw)
-
-                    # 필수 필드 모두 추출 성공하면 종료
-                    if star_rating and count_of_reviews:
-                        break
-
-                    if attempt < MAX_RETRY:
-                        time.sleep(1)
-                    else:
-                        # 마지막 시도에서도 실패
-                        missing = []
-                        if not star_rating: missing.append('star_rating')
-                        if not count_of_reviews: missing.append('count_of_reviews')
-                        if missing:
-                            print(f"[WARNING] 리뷰 데이터 추출 실패 (시도 {attempt}/{MAX_RETRY}) - 미추출: {', '.join(missing)}")
-
             # 리뷰 섹션으로 이동
             summarized_review_content = None
             try:
@@ -778,6 +781,50 @@ class AmazonDetailCrawler(BaseCrawler):
                 page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
 
+                # 리뷰 관련 필드 (최대 3회 재시도)
+                count_of_reviews = None
+                star_rating = None
+                count_of_star_ratings = None
+
+                # "No customer reviews" 텍스트 감지 (tree에서 검색)
+                no_review_keywords = ['no customer reviews', 'no reviews', 'be the first to review']
+                page_text = tree.text_content().lower() if tree is not None else ''
+                is_no_reviews = any(keyword in page_text for keyword in no_review_keywords)
+
+                if is_no_reviews:
+                    count_of_reviews = '0'
+                    star_rating = 'No customer reviews'
+                    count_of_star_ratings = 'No customer reviews'
+                else:
+                    for attempt in range(1, MAX_RETRY + 1):
+                        # 첫 시도는 기존 tree 사용, 재시도 시에만 재파싱
+                        if attempt > 1:
+                            page_html = self.driver.page_source
+                            tree = html.fromstring(page_html)
+
+                        # 개발 완료 후 count_of_reviews에 있는 xpath를 count_of_star_ratings로 변경 필요
+                        if count_of_star_ratings is None:
+                            count_of_star_ratings_raw = self.safe_extract(tree, 'count_of_star_ratings')
+                            count_of_star_ratings = self.extract_review_count(count_of_star_ratings_raw)
+
+                        if star_rating is None:
+                            star_rating_raw = self.safe_extract(tree, 'star_rating')
+                            star_rating = self.extract_rating(star_rating_raw)
+
+                        # 필수 필드 모두 추출 성공하면 종료
+                        if star_rating and count_of_star_ratings:
+                            break
+
+                        if attempt < MAX_RETRY:
+                            time.sleep(1)
+                        else:
+                            # 마지막 시도에서도 실패
+                            missing = []
+                            if not star_rating: missing.append('star_rating')
+                            if not count_of_star_ratings: missing.append('count_of_star_ratings')
+                            if missing:
+                                print(f"[WARNING] 리뷰 데이터 추출 실패 (시도 {attempt}/{MAX_RETRY}) - 미추출: {', '.join(missing)}")
+
                 summarized_review_content = self.safe_extract(tree, 'summarized_review_content')
             except Exception:
                 pass
@@ -786,7 +833,9 @@ class AmazonDetailCrawler(BaseCrawler):
             if is_no_reviews:
                 detailed_review_content = 'No customer reviews'
             else:
-                detailed_review_content = self.extract_reviews_from_detail_page(tree, max_reviews=20)
+                review_result = self.extract_reviews_from_review_page(item, max_reviews=20)
+                count_of_reviews = review_result.get('review_count') if review_result else '0'
+                detailed_review_content = review_result.get('reviews') if review_result else None
 
             # 결합된 데이터
             detail_data = {
