@@ -195,7 +195,6 @@ class AmazonDetailCrawler(BaseCrawler):
                 FROM amazon_hhp_product_list
                 WHERE account_name = %s AND batch_id = %s AND product_url IS NOT NULL
                 ORDER BY id
-                limit 1
             """
 
             cursor.execute(query, (self.account_name, self.batch_id))
