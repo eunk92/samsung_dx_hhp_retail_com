@@ -452,6 +452,8 @@ class TVSentimentAnalyzer:
                   AND r.detailed_review_content != ''
                   AND m.sku IS NOT NULL
                   AND m.sku != ''
+                  AND m.sku != 'no sku'
+                  AND m.sku != 'Not TV'
                   AND {date_condition}
             )
             SELECT
