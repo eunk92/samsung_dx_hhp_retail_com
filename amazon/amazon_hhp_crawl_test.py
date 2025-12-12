@@ -40,8 +40,10 @@ import sys
 import os
 import argparse
 import subprocess
+import traceback
 import time
 from datetime import datetime
+import pytz
 
 # 공통 환경 설정 (작업 디렉토리, 한글 출력, 경로 설정)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -67,11 +69,13 @@ class AmazonIntegratedCrawlerTest:
         """
         self.account_name = 'Amazon'
         self.batch_id = batch_id
-        self.start_time = None
+        self.start_time_kst = None
+        self.start_time_server = None
         self.end_time = None
         self.resume_from = resume_from
         self.login_success = False
         self.base_crawler = BaseCrawler()
+        self.korea_tz = pytz.timezone('Asia/Seoul')
 
     def run_login(self):
         """Amazon 로그인 스크립트 실행. Returns: bool"""
@@ -112,7 +116,8 @@ class AmazonIntegratedCrawlerTest:
 
     def run(self):
         """통합 크롤러 실행 (테스트 모드). Returns: bool"""
-        self.start_time = datetime.now()
+        self.start_time_kst = datetime.now(self.korea_tz)
+        self.start_time_server = datetime.now()
 
         # batch_id 생성 또는 재사용
         if not self.batch_id:
@@ -199,7 +204,7 @@ class AmazonIntegratedCrawlerTest:
 
             # 결과 출력
             self.end_time = datetime.now()
-            elapsed = (self.end_time - self.start_time).total_seconds()
+            elapsed = (self.end_time - self.start_time_server).total_seconds()
 
             print("\n" + "="*60)
             print(f"완료 ({elapsed/60:.1f}분)")
@@ -219,13 +224,14 @@ class AmazonIntegratedCrawlerTest:
                 if isinstance(v, dict) and v.get('success') is False
             ]
             send_crawl_alert(
-                retailer= 'USA Amazon HHP',
+                retailer='USA Amazon HHP',
                 results=crawl_results,
                 failed_stages=failed_stages,
                 elapsed_time=elapsed,
                 resume_from=self.resume_from,
                 test_mode=True,
-                start_time=self.start_time
+                start_time_kst=self.start_time_kst,
+                start_time_server=self.start_time_server
             )
 
             # 로깅 종료
@@ -239,21 +245,21 @@ class AmazonIntegratedCrawlerTest:
 
         except Exception as e:
             print(f"\n[ERROR] Amazon HHP Integrated Crawler (Test Mode) failed: {e}")
-            import traceback
             traceback.print_exc()
 
             # 예외 발생 시에도 이메일 알림 발송
             self.end_time = datetime.now()
-            elapsed = (self.end_time - self.start_time).total_seconds() if self.start_time else 0
+            elapsed = (self.end_time - self.start_time_server).total_seconds() if self.start_time_server else 0
             send_crawl_alert(
-                retailer='Amazon HHP',
+                retailer='USA Amazon HHP',
                 results=crawl_results,
                 failed_stages=['Fatal error'],
                 elapsed_time=elapsed,
                 error_message=str(e),
                 resume_from=self.resume_from,
                 test_mode=True,
-                start_time=self.start_time
+                start_time_kst=self.start_time_kst,
+                start_time_server=self.start_time_server
             )
 
             # 예외 발생 시에도 로깅 종료

@@ -37,7 +37,7 @@ def format_elapsed_time(seconds, short=False):
         return f"{seconds:.1f} seconds ({time_str})"
 
 
-def send_crawl_alert(retailer, results, failed_stages, elapsed_time, error_message=None, resume_from=None, test_mode=False, start_time=None):
+def send_crawl_alert(retailer, results, failed_stages, elapsed_time, error_message=None, resume_from=None, test_mode=False, start_time_kst=None, start_time_server=None):
     """
     Send crawling completion/failure email alert for integrated crawlers.
 
@@ -49,7 +49,8 @@ def send_crawl_alert(retailer, results, failed_stages, elapsed_time, error_messa
         error_message: Additional error message (optional)
         resume_from: Resume stage name if resumed (optional)
         test_mode: If True, adds [TEST] prefix to email subject (default: False)
-        start_time: Crawler start time as datetime object (optional)
+        start_time_kst: Crawler start time in KST timezone (optional)
+        start_time_server: Crawler start time in server local timezone (optional)
 
     Returns:
         bool: Email send success status
@@ -88,13 +89,9 @@ def send_crawl_alert(retailer, results, failed_stages, elapsed_time, error_messa
         now_kst = datetime.now(korea_tz)
         now_server = datetime.now()
 
-        # Calculate start/end times in both timezones
-        if start_time:
-            start_kst = start_time.astimezone(korea_tz) if start_time.tzinfo else korea_tz.localize(start_time)
-            start_server = start_time.replace(tzinfo=None) if start_time.tzinfo else start_time
-        else:
-            start_kst = None
-            start_server = None
+        # Start times from crawler
+        start_kst = start_time_kst
+        start_server = start_time_server
 
         # Determine alert level
         is_critical = len(failed_stages) > 0 or error_message is not None

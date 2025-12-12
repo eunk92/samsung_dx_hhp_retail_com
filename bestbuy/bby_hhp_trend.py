@@ -52,7 +52,7 @@ class BestBuyTrendCrawler(BaseCrawler):
         self.url_template = None
         self.current_rank = 0
 
-        self.test_count = 2  # 테스트 모드
+        self.test_count = 1  # 테스트 모드
         self.excluded_keywords = [
             'Screen Magnifier', 'mount', 'holder', 'cable', 'adapter', 'stand', 'wallet'
         ]  # 제외할 키워드 리스트 (retailer_sku_name에 포함 시 수집 제외)
