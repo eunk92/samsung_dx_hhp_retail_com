@@ -400,7 +400,8 @@ class AmazonItemCrawler(BaseCrawler):
             print(f"ERROR: {results['error']}건")
             print(f"총계: {sum(results.values())}건")
 
-            return results
+            # 성공 여부: insert/update가 있거나, error가 없으면 성공
+            return (results['insert'] + results['update']) > 0 or results['error'] == 0
 
         except Exception as e:
             print(f"[ERROR] Run failed: {e}")

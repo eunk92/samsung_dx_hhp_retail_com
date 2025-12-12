@@ -41,6 +41,7 @@ import os
 import argparse
 import subprocess
 import traceback
+import time
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,6 +53,7 @@ from amazon.amazon_hhp_bsr import AmazonBSRCrawler
 from amazon.amazon_hhp_dt import AmazonDetailCrawler
 from amazon.amazon_hhp_item import AmazonItemCrawler
 from common.base_crawler import BaseCrawler
+from common.alert_hhp_monitor import send_crawl_alert
 
 
 class AmazonIntegratedCrawler:
@@ -130,42 +132,48 @@ class AmazonIntegratedCrawler:
             print(f"resume_from: {self.resume_from}")
 
         try:
+            # 결과: {'stage': {'success': bool, 'duration': float}} 형태로 저장
             crawl_results = {'main': None, 'bsr': None, 'login': None, 'detail': None, 'item': None}
 
             # STEP 1: Main
             if not self.resume_from or self.resume_from == 'main':
                 print(f"\n[STEP 1/5] Main Crawler...")
+                stage_start = time.time()
                 try:
-                    crawl_results['main'] = AmazonMainCrawler(test_mode=False, batch_id=self.batch_id).run()
+                    success = AmazonMainCrawler(test_mode=False, batch_id=self.batch_id).run()
+                    crawl_results['main'] = {'success': success, 'duration': time.time() - stage_start}
                 except Exception as e:
                     print(f"[ERROR] Main: {e}")
                     traceback.print_exc()
-                    crawl_results['main'] = False
+                    crawl_results['main'] = {'success': False, 'duration': time.time() - stage_start}
             else:
                 crawl_results['main'] = 'skipped'
 
             # STEP 2: BSR
             if not self.resume_from or self.resume_from in ['main', 'bsr']:
                 print(f"\n[STEP 2/5] BSR Crawler...")
+                stage_start = time.time()
                 try:
-                    crawl_results['bsr'] = AmazonBSRCrawler(test_mode=False, batch_id=self.batch_id).run()
+                    success = AmazonBSRCrawler(test_mode=False, batch_id=self.batch_id).run()
+                    crawl_results['bsr'] = {'success': success, 'duration': time.time() - stage_start}
                 except Exception as e:
                     print(f"[ERROR] BSR: {e}")
                     traceback.print_exc()
-                    crawl_results['bsr'] = False
+                    crawl_results['bsr'] = {'success': False, 'duration': time.time() - stage_start}
             else:
                 crawl_results['bsr'] = 'skipped'
 
             # STEP 3: Login
             if not self.resume_from or self.resume_from in ['main', 'bsr', 'login']:
                 print(f"\n[STEP 3/5] Login...")
+                stage_start = time.time()
                 try:
                     self.login_success = self.run_login()
-                    crawl_results['login'] = self.login_success
+                    crawl_results['login'] = {'success': self.login_success, 'duration': time.time() - stage_start}
                 except Exception as e:
                     print(f"[ERROR] Login: {e}")
                     traceback.print_exc()
-                    crawl_results['login'] = False
+                    crawl_results['login'] = {'success': False, 'duration': time.time() - stage_start}
             else:
                 crawl_results['login'] = 'skipped'
                 self.login_success = True  # resume_from=detail인 경우 기존 쿠키 사용
@@ -173,23 +181,27 @@ class AmazonIntegratedCrawler:
             # STEP 4: Detail
             if not self.resume_from or self.resume_from in ['main', 'bsr', 'login', 'detail']:
                 print(f"\n[STEP 4/5] Detail Crawler...")
+                stage_start = time.time()
                 try:
-                    crawl_results['detail'] = AmazonDetailCrawler(batch_id=self.batch_id, login_success=self.login_success, test_mode=False).run()
+                    success = AmazonDetailCrawler(batch_id=self.batch_id, login_success=self.login_success, test_mode=False).run()
+                    crawl_results['detail'] = {'success': success, 'duration': time.time() - stage_start}
                 except Exception as e:
                     print(f"[ERROR] Detail: {e}")
                     traceback.print_exc()
-                    crawl_results['detail'] = False
+                    crawl_results['detail'] = {'success': False, 'duration': time.time() - stage_start}
             else:
                 crawl_results['detail'] = 'skipped'
 
             # STEP 5: Item
             print(f"\n[STEP 5/5] Item Crawler...")
+            stage_start = time.time()
             try:
-                crawl_results['item'] = AmazonItemCrawler(batch_id=self.batch_id, test_mode=False).run()
+                success = AmazonItemCrawler(batch_id=self.batch_id, test_mode=False).run()
+                crawl_results['item'] = {'success': success, 'duration': time.time() - stage_start}
             except Exception as e:
                 print(f"[ERROR] Item: {e}")
                 traceback.print_exc()
-                crawl_results['item'] = False
+                crawl_results['item'] = {'success': False, 'duration': time.time() - stage_start}
 
             # 결과 출력
             self.end_time = datetime.now()
@@ -198,19 +210,57 @@ class AmazonIntegratedCrawler:
             print("\n" + "="*60)
             print(f"완료 ({elapsed/60:.1f}분)")
             for step, result in crawl_results.items():
-                status = "SKIP" if result == 'skipped' else "OK" if result else "FAIL"
+                if result == 'skipped':
+                    status = "SKIP"
+                elif isinstance(result, dict):
+                    status = "OK" if result.get('success') else "FAIL"
+                else:
+                    status = "FAIL"
                 print(f"  {step}: {status}")
             print("="*60)
+
+            # 이메일 알림 발송
+            failed_stages = [
+                k for k, v in crawl_results.items()
+                if isinstance(v, dict) and v.get('success') is False
+            ]
+            send_crawl_alert(
+                retailer='USA Amazon HHP',
+                results=crawl_results,
+                failed_stages=failed_stages,
+                elapsed_time=elapsed,
+                resume_from=self.resume_from,
+                test_mode=False,
+                start_time=self.start_time
+            )
 
             # 로깅 종료
             self.base_crawler.stop_logging()
 
-            success_count = sum(1 for r in crawl_results.values() if r is True)
+            success_count = sum(
+                1 for r in crawl_results.values()
+                if isinstance(r, dict) and r.get('success') is True
+            )
             return success_count > 0
 
         except Exception as e:
             print(f"\n[ERROR] Integrated crawler failed: {e}")
             traceback.print_exc()
+
+            # 예외 발생 시에도 이메일 알림 발송
+            self.end_time = datetime.now()
+            elapsed = (self.end_time - self.start_time).total_seconds() if self.start_time else 0
+            send_crawl_alert(
+                retailer='USA Amazon HHP',
+                results=crawl_results,
+                failed_stages=['Fatal error'],
+                elapsed_time=elapsed,
+                error_message=str(e),
+                resume_from=self.resume_from,
+                test_mode=False,
+                start_time=self.start_time
+            )
+
             # 예외 발생 시에도 로깅 종료
             self.base_crawler.stop_logging()
             return False

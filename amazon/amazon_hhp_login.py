@@ -366,9 +366,6 @@ def test_login_with_cookies():
 
                 if "hello" in account_text and "sign in" not in account_text:
                     print("[OK] Cookie login successful!")
-                    # ZIP 코드 설정 확인
-                    print("[INFO] Setting ZIP code to New York...")
-                    set_amazon_zip_code(driver, '10001')
                     return driver
                 else:
                     print("[WARNING] Cookies expired, need fresh login")
