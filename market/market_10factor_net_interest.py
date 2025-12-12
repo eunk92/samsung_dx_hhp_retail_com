@@ -1,7 +1,15 @@
 """
 Market 10대 인자 - 금융기관 순 이자수입 (Net Interest Income)
 
-IMF FSI (Financial Soundness Indicators) - FSIBSIS 데이터셋
+================================================================================
+데이터셋 정보
+================================================================================
+Dataset name: Financial Soundness Indicators (FSI), Balance Sheet, Income Statement and Memorandum Series
+ID: FSIBSIS
+Agency: IMF.STA
+Version: 18.0.0
+
+- NINTINC_XDC: Net Interest Income (순 이자수입, Domestic Currency)
 - NINTINC_USD: Net Interest Income (순 이자수입, USD)
 - 부문: S12CFSI (Other Depository Corporations)
 
@@ -14,11 +22,11 @@ Data: /data/dataflow/IMF.STA/FSIBSIS/+/{key}
 Key 구조: COUNTRY.SECTOR.INDICATOR.FREQUENCY
 - COUNTRY: USA, KOR 등
 - SECTOR: S12CFSI
-- INDICATOR: NINTINC_USD
+- INDICATOR: NINTINC_XDC, NINTINC_USD
 - FREQUENCY: Q (분기), A (연간)
 
-예시:
-https://api.imf.org/external/sdmx/3.0/data/dataflow/IMF.STA/FSIBSIS/+/USA.S12CFSI.NINTINC_USD.Q
+예시 (두 지표 동시 조회, +로 연결):
+https://api.imf.org/external/sdmx/3.0/data/dataflow/IMF.STA/FSIBSIS/+/USA.S12CFSI.NINTINC_XDC+NINTINC_USD.Q
 
 ================================================================================
 """
@@ -39,17 +47,42 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logger = None
 
 
-def setup_logger():
-    """로거 설정"""
+def setup_logger(log_file=None):
+    """로거 설정
+
+    Args:
+        log_file: 로그 파일명 (None이면 콘솔만 출력)
+
+    Returns:
+        str: 로그 파일 경로 (파일 로깅 시)
+    """
     global logger
     logger = logging.getLogger('market_net_interest')
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
 
+    formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+    # 콘솔 핸들러
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.DEBUG)
-    console_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+    console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
+
+    # 파일 핸들러 (log_file이 지정된 경우)
+    if log_file:
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, log_file)
+
+        file_handler = logging.FileHandler(log_path, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
+        return log_path
+
+    return None
 
 
 def print_log(level, message):
@@ -72,7 +105,7 @@ class IMFNetInterestClient:
     BASE_URL = "https://api.imf.org/external/sdmx/3.0"
     DATAFLOW = "IMF.STA/FSIBSIS"
     SECTOR = "S12CFSI"
-    INDICATOR = "NINTINC_XDC"
+    INDICATORS = ["NINTINC_XDC", "NINTINC_USD"]  # Domestic Currency, USD
 
     def __init__(self):
         self.session = requests.Session()
@@ -83,7 +116,7 @@ class IMFNetInterestClient:
 
     def get_data(self, country_code=None, frequency="Q", period=None):
         """
-        순 이자수입 데이터 조회
+        순 이자수입 데이터 조회 (NINTINC_XDC, NINTINC_USD 동시 조회)
 
         Args:
             country_code: 국가 코드 (예: 'USA', 'KOR', None/'all'=전체)
@@ -102,7 +135,10 @@ class IMFNetInterestClient:
         else:
             country_key = country_code.upper()
 
-        key = f"{country_key}.{self.SECTOR}.{self.INDICATOR}.{frequency}"
+        # 여러 지표를 +로 연결하여 한 번에 조회 (URL path에서 +는 %2B로 인코딩)
+        indicator_key = '%2B'.join(self.INDICATORS)
+
+        key = f"{country_key}.{self.SECTOR}.{indicator_key}.{frequency}"
         url = f"{self.BASE_URL}/data/dataflow/{self.DATAFLOW}/+/{key}"
 
         params = {
@@ -252,7 +288,7 @@ class IMFNetInterestClient:
 
     def get_net_interest_income(self, country_code=None, frequency="Q", period=None):
         """
-        순 이자수입 데이터 조회 및 파싱
+        순 이자수입 데이터 조회 및 파싱 (NINTINC_XDC, NINTINC_USD 동시 조회)
 
         Args:
             country_code: 국가 코드 (None/'all'=전체)
@@ -262,8 +298,13 @@ class IMFNetInterestClient:
         Returns:
             tuple: (request_url, response_json, results)
         """
+        print_log("INFO", f"지표 조회: {', '.join(self.INDICATORS)}")
         request_url, response_json = self.get_data(country_code, frequency, period)
         results = self.parse_response(response_json)
+
+        # 국가, indicator, 기간 순 정렬
+        results.sort(key=lambda x: (x['country_code'], x['indicator'], x['period']))
+        print_log("INFO", f"총 {len(results)}건 조회 완료")
 
         return request_url, response_json, results
 
@@ -430,144 +471,126 @@ def input_with_timeout(prompt, timeout=10):
 # 메인 실행
 # ============================================================================
 
-def dry_run():
-    """드라이 모드 - API 응답 확인"""
-    setup_logger()
-    batch_id = "t_" + datetime.now().strftime('%Y%m%d_%H%M%S')
+# 모드 설정
+MODE_CONFIG = {
+    'dry': {
+        'name': 'DRY RUN',
+        'batch_prefix': 't_',
+        'table_name': None,  # DB 저장 안함
+        'save_log': False,
+        'save_api': False
+    },
+    'test': {
+        'name': 'TEST MODE',
+        'batch_prefix': 't_',
+        'table_name': 'test_market_net_interest',
+        'save_log': True,
+        'save_api': True
+    },
+    'prod': {
+        'name': '운영 모드',
+        'batch_prefix': '',
+        'table_name': 'market_net_interest',
+        'save_log': True,
+        'save_api': True
+    }
+}
 
+
+def run(mode='prod'):
+    """
+    통합 실행 함수
+
+    Args:
+        mode: 'dry' (DRY RUN), 'test' (TEST MODE), 'prod' (운영 모드)
+    """
+    config = MODE_CONFIG.get(mode, MODE_CONFIG['prod'])
+
+    # batch_id 생성
+    batch_id = config['batch_prefix'] + datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    # 로거 설정
+    log_path = None
+    if config['save_log']:
+        log_file = f"net_interest_{batch_id}.log"
+        log_path = setup_logger(log_file)
+    else:
+        setup_logger()
+
+    # 헤더 출력
     print("\n" + "=" * 60)
-    print("Market 10대 인자 - 순 이자수입 [DRY RUN]")
+    print(f"Market 10대 인자 - 순 이자수입 [{config['name']}]")
     print("=" * 60)
     print(f"배치 ID: {batch_id}")
-    print("데이터: IMF FSIBSIS (Financial Soundness Indicators)")
-    print("지표: NINTINC_XDC (Net Interest Income, Domestic Currency)")
-    print("부문: S12CFSI (Other Depository Corporations)")
+    if log_path:
+        print(f"로그 파일: {log_path}")
     print()
 
     # 국가 선택
+    default_period = get_previous_quarters()
+    print("[국가 선택] (10초 후 전체 국가로 자동 실행)")
     print("  all 또는 엔터: 전체 국가")
     print("  USA, KOR 등: 특정 국가")
-    country = input_with_timeout("국가 입력 (예: USA, all)", timeout=30)
+    country = input_with_timeout("국가 입력", timeout=10)
     if not country:
         country = 'all'
     print(f"선택된 국가: {country}")
 
     # 기간 선택
-    default_period = get_previous_quarters()
-    print(f"  2024-Q1~2024-Q4: 범위 조회")
-    print(f"  2024-Q1: 특정 분기")
+    print(f"\n[기간 선택] (10초 후 {default_period} 자동 실행)")
+    print("  all: 전체 기간")
+    print("  2024-Q1~2024-Q4: 범위 조회")
+    print("  2024-Q1: 특정 분기")
     print(f"  엔터: {default_period}")
-    period = input_with_timeout(f"기간 입력", timeout=30)
+    period = input_with_timeout("기간 입력", timeout=10)
     if not period:
         period = default_period
     print(f"선택된 기간: {period}")
 
-    client = IMFNetInterestClient()
-    print("\n조회 중...")
-    _, _, results = client.get_net_interest_income(country, 'Q', period)
+    # 지표 선택
+    print("\n[지표 선택] (10초 후 전체 지표로 자동 실행)")
+    print("  1: NINTINC_XDC (Domestic Currency)")
+    print("  2: NINTINC_USD (USD)")
+    print("  엔터: 전체 지표")
+    indicator_choice = input_with_timeout("지표 입력 (1/2/엔터)", timeout=10)
 
-    if results:
-        print(f"\n조회 결과: {len(results)}건")
-        print("-" * 50)
-        for row in results:
-            print(f"  [{row['country_code']}] [{row['indicator']}] {row['period']}: {row['value']}")
+    client = IMFNetInterestClient()
+    if indicator_choice == '1':
+        client.INDICATORS = ['NINTINC_XDC']
+        print("선택된 지표: NINTINC_XDC")
+    elif indicator_choice == '2':
+        client.INDICATORS = ['NINTINC_USD']
+        print("선택된 지표: NINTINC_USD")
     else:
-        print("\n데이터 없음")
+        print(f"선택된 지표: {', '.join(client.INDICATORS)} (전체)")
 
-    print("\n" + "=" * 60)
-    print("[DRY RUN] 완료 - DB 저장 없음")
-    print("=" * 60)
-
-
-def test_mode():
-    """테스트 모드 - DB 저장"""
-    setup_logger()
-    batch_id = "t_" + datetime.now().strftime('%Y%m%d_%H%M%S')
-
-    print("\n" + "=" * 60)
-    print("Market 10대 인자 - 순 이자수입 [TEST MODE]")
-    print("=" * 60)
-    print(f"배치 ID: {batch_id}")
-    print()
-
-    # 국가 선택
-    print("  all 또는 엔터: 전체 국가")
-    print("  USA, KOR 등: 특정 국가")
-    country = input_with_timeout("국가 입력 (예: USA, all)", timeout=30)
-    if not country:
-        country = 'all'
-    print(f"선택된 국가: {country}")
-
-    # 기간 선택
-    default_period = get_previous_quarters()
-    print(f"  2024-Q1~2024-Q4: 범위 조회")
-    print(f"  2024-Q1: 특정 분기")
-    print(f"  엔터: {default_period}")
-    period = input_with_timeout(f"기간 입력", timeout=30)
-    if not period:
-        period = default_period
-    print(f"선택된 기간: {period}")
-
-    client = IMFNetInterestClient()
+    # API 조회
     print("\n조회 중...")
     request_url, response_json, results = client.get_net_interest_income(country, 'Q', period)
 
     # API 요청/응답 저장
-    save_api_request('net_interest_income', batch_id, request_url, response_json)
+    if config['save_api']:
+        save_api_request('net_interest_income', batch_id, request_url, response_json)
 
+    # 결과 출력 및 DB 저장
     if results:
-        print(f"\n조회 결과: {len(results)}건")
-        save_to_db(results, batch_id, table_name='test_market_net_interest')
+        print_log("INFO", f"조회 결과: {len(results)}건")
+        print_log("INFO", "-" * 50)
+        for idx, row in enumerate(results, 1):
+            print_log("INFO", f"  [{idx}/{len(results)}] [{row['country_code']}] [{row['indicator']}] {row['period']}: {row['value']}")
+
+        if config['table_name']:
+            save_to_db(results, batch_id, table_name=config['table_name'])
     else:
-        print("\n데이터 없음")
+        print_log("WARNING", "데이터 없음")
 
-    print("\n" + "=" * 60)
-    print(f"[TEST MODE] 완료 - {len(results) if results else 0}건 저장")
-    print("=" * 60)
-
-
-def main(country=None, period=None):
-    """운영 모드"""
-    setup_logger()
-    batch_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-
-    print("\n" + "=" * 60)
-    print("Market 10대 인자 - 순 이자수입 [운영 모드]")
-    print("=" * 60)
-    print(f"배치 ID: {batch_id}")
-
-    # 국가 설정 (기본값: 전체)
-    if not country:
-        country = 'all'
-    print(f"국가: {country.upper() if country.lower() != 'all' else '전체'}")
-
-    # 기간 설정 (기본값: 전전분기~전분기)
-    if not period:
-        period = get_previous_quarters()
-        print(f"기간: {period} (전전분기~전분기)")
+    # 완료 메시지
+    print_log("INFO", "=" * 60)
+    if config['table_name']:
+        print_log("INFO", f"[{config['name']}] 완료 - {len(results) if results else 0}건 저장")
     else:
-        print(f"기간: {period}")
-    print()
-
-    client = IMFNetInterestClient()
-    print("조회 중...")
-    request_url, response_json, results = client.get_net_interest_income(country, 'Q', period)
-
-    # API 요청/응답 저장
-    save_api_request('net_interest_income', batch_id, request_url, response_json)
-
-    if results:
-        print(f"\n조회 결과: {len(results)}건")
-        print("-" * 50)
-        for row in results:
-            print(f"  [{row['country_code']}] [{row['indicator']}] {row['period']}: {row['value']}")
-        save_to_db(results, batch_id, table_name='market_net_interest')
-    else:
-        print("\n데이터 없음")
-
-    print("\n" + "=" * 60)
-    print(f"[운영 모드] 완료 - {len(results) if results else 0}건 저장")
-    print("=" * 60)
+        print_log("INFO", f"[{config['name']}] 완료 - DB 저장 없음")
+    print_log("INFO", "=" * 60)
 
 
 if __name__ == "__main__":
@@ -581,7 +604,7 @@ if __name__ == "__main__":
     print()
 
     mode = ''
-    print("모드 선택 (10초 대기): ", end='', flush=True)
+    print("모드 입력: ", end='', flush=True)
     start_time = time.time()
     while time.time() - start_time < 10:
         if msvcrt.kbhit():
@@ -598,26 +621,13 @@ if __name__ == "__main__":
 
     try:
         if mode == 'd':
-            dry_run()
-            input("\n엔터키를 누르면 종료합니다...")
+            run('dry')
         elif mode == 't':
-            test_mode()
-            input("\n엔터키를 누르면 종료합니다...")
+            run('test')
         else:
-            # 운영 모드: 국가/기간 입력 (타임아웃 시 전체 국가, 전전분기~전분기)
-            print("\n[국가 선택] (10초 후 전체 국가로 자동 실행)")
-            print("  all 또는 엔터: 전체 국가")
-            print("  USA, KOR 등: 특정 국가")
-            country = input_with_timeout("국가 입력 (예: USA, all)", timeout=10)
+            run('prod')
 
-            default_period = get_previous_quarters()
-            print(f"\n[기간 선택] (10초 후 {default_period} 자동 실행)")
-            print("  2024-Q1~2024-Q4: 범위 조회")
-            print("  2024-Q1: 특정 분기")
-            print(f"  엔터: {default_period}")
-            period = input_with_timeout("기간 입력", timeout=10)
-
-            main(country, period)
+        input("\n엔터키를 누르면 종료합니다...")
     except Exception as e:
         print(f"\n[ERROR] 예외 발생: {e}")
         traceback.print_exc()
