@@ -71,6 +71,9 @@ class WalmartMainCrawler(BaseCrawler):
         self.current_rank = 0
         self.browser_restart_interval = 5  # N페이지마다 브라우저 재시작
         self.saved_urls = set()  # 중복 URL 체크용
+        self.excluded_keywords = [
+            'Screen Magnifier', 'mount', 'holder', 'cable', 'adapter', 'stand', 'wallet'
+        ]  # 제외할 키워드 리스트 (retailer_sku_name에 포함 시 수집 제외)
 
     def format_walmart_price(self, price_result):
         """Walmart 가격 결과를 $XX.XX 형식으로 변환"""
@@ -442,8 +445,11 @@ class WalmartMainCrawler(BaseCrawler):
 
                 # Save screenshot for debugging
                 try:
-                    self.driver.save_screenshot(f"captcha_screen_{int(time.time())}.png")
-                    print("[INFO] Screenshot saved for debugging")
+                    capture_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'capture')
+                    os.makedirs(capture_dir, exist_ok=True)
+                    screenshot_path = os.path.join(capture_dir, f"captcha_screen_{int(time.time())}.png")
+                    self.driver.save_screenshot(screenshot_path)
+                    print(f"[INFO] Screenshot saved: {screenshot_path}")
                 except:
                     pass
 
@@ -757,12 +763,20 @@ class WalmartMainCrawler(BaseCrawler):
         if not products:
             return 0
 
-        # 중복 제거 및 rank 할당
+        # 키워드 필터링, 중복 제거 및 rank 할당
         unique_products = []
         for product in products:
+            
+            # 제외 키워드 필터링 (먼저 수행)
+            retailer_sku_name = product.get('retailer_sku_name') or ''
+            if self.excluded_keywords and any(keyword.lower() in retailer_sku_name.lower() for keyword in self.excluded_keywords):
+                print(f"[SKIP] 제외 키워드 포함: {retailer_sku_name[:40]}...")
+                continue
+
+            # 중복 URL 필터링
             product_url = product.get('product_url')
             if product_url and product_url in self.saved_urls:
-                print(f"[SKIP] 중복 URL: {product.get('retailer_sku_name', 'N/A')[:40]}...")
+                print(f"[SKIP] 중복 URL: {retailer_sku_name[:40] if retailer_sku_name else 'N/A'}...")
                 continue
             if product_url:
                 self.saved_urls.add(product_url)

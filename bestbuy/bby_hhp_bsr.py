@@ -58,6 +58,9 @@ class BestBuyBSRCrawler(BaseCrawler):
         self.test_count = 1  # 테스트 모드
         self.max_products = 100  # 운영 모드
         self.max_pages = 20  # 최대 페이지 수
+        self.excluded_keywords = [
+            'Screen Magnifier', 'mount', 'holder', 'cable', 'adapter', 'stand', 'wallet'
+        ]  # 제외할 키워드 리스트 (retailer_sku_name에 포함 시 수집 제외)
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 로그 정리"""
@@ -251,9 +254,7 @@ class BestBuyBSRCrawler(BaseCrawler):
             return []
 
     def save_products(self, products):
-        """DB 저장: bsr_rank 할당 → UPDATE 즉시 실행 / INSERT 배치 처리
-        Note: 중복 URL 필터링은 run()에서 선행 처리됨
-        """
+        """DB 저장: bsr_rank 할당 → UPDATE 즉시 실행 / INSERT 배치 처리"""
         if not products:
             return {'insert': 0, 'update': 0}
 
@@ -270,7 +271,21 @@ class BestBuyBSRCrawler(BaseCrawler):
             """
 
             for product in products:
+                
+                # 제외 키워드 필터링 (먼저 수행)
+                retailer_sku_name = product.get('retailer_sku_name') or ''
+                if self.excluded_keywords and any(keyword.lower() in retailer_sku_name.lower() for keyword in self.excluded_keywords):
+                    print(f"[SKIP] 제외 키워드 포함: {retailer_sku_name[:40]}...")
+                    continue
+
                 product_url = product.get('product_url')
+
+                # 중복 URL 필터링 (페이지 간 중복 방지)
+                if product_url and product_url in self.crawled_urls:
+                    continue
+                
+                if product_url:
+                    self.crawled_urls.add(product_url)
 
                 # bsr_rank 할당
                 self.current_rank += 1
@@ -405,24 +420,8 @@ class BestBuyBSRCrawler(BaseCrawler):
                         break
                     print(f"[ERROR] No products found at page {page_num}")
                 else:
-                    # 중복 URL 필터링 선행 (remaining 계산 전에 수행)
-                    unique_products = []
-                    for product in products:
-                        product_url = product.get('product_url')
-                        if not product_url:
-                            unique_products.append(product)
-                        elif product_url not in self.crawled_urls:
-                            self.crawled_urls.add(product_url)
-                            unique_products.append(product)
-
-                    if not unique_products:
-                        print(f"[INFO] Page {page_num}: All products filtered (duplicate URLs)")
-                        time.sleep(30)
-                        page_num += 1
-                        continue
-
                     remaining = target_products - (total_insert + total_update)
-                    products_to_save = unique_products[:remaining]
+                    products_to_save = products[:remaining]
                     result = self.save_products(products_to_save)
                     total_insert += result['insert']
                     total_update += result['update']

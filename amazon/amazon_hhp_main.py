@@ -64,6 +64,9 @@ class AmazonMainCrawler(BaseCrawler):
         self.max_products = 300  # 운영 모드
         self.max_pages = 20  # 최대 페이지 수
         self.saved_urls = set()  # 중복 URL 추적용
+        self.excluded_keywords = [
+            'Screen Magnifier', 'mount', 'holder', 'cable', 'adapter', 'stand', 'wallet'
+        ]  # 제외할 키워드 리스트 (retailer_sku_name에 포함 시 수집 제외)
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 1개월 전 로그 정리"""
@@ -444,14 +447,21 @@ class AmazonMainCrawler(BaseCrawler):
         if not products:
             return 0
 
-        # 중복 제거 및 rank 재할당
+        # 키워드 필터링, 중복 제거 및 rank 재할당
         unique_products = []
         for product in products:
+             
+            # 제외 키워드 필터링 (먼저 수행)
+            retailer_sku_name = product.get('retailer_sku_name') or ''           
+            if self.excluded_keywords and any(keyword.lower() in retailer_sku_name.lower() for keyword in self.excluded_keywords):
+                print(f"[SKIP] 제외 키워드 포함: {retailer_sku_name[:40]}...")
+                continue
+
+            # 중복 URL 제외
             product_url = product.get('product_url')
             normalized_url = self.normalize_amazon_url(product_url)
-
             if normalized_url and normalized_url in self.saved_urls:
-                print(f"[SKIP] 중복 URL: {product.get('retailer_sku_name', 'N/A')[:40]}...")
+                print(f"[SKIP] 중복 URL: {retailer_sku_name[:40] if retailer_sku_name else 'N/A'}...")
                 continue
 
             if normalized_url:

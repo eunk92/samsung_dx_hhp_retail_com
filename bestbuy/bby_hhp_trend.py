@@ -53,6 +53,9 @@ class BestBuyTrendCrawler(BaseCrawler):
         self.current_rank = 0
 
         self.test_count = 2  # 테스트 모드
+        self.excluded_keywords = [
+            'Screen Magnifier', 'mount', 'holder', 'cable', 'adapter', 'stand', 'wallet'
+        ]  # 제외할 키워드 리스트 (retailer_sku_name에 포함 시 수집 제외)
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 로그 정리"""
@@ -107,6 +110,12 @@ class BestBuyTrendCrawler(BaseCrawler):
             products = []
             for idx, item in enumerate(containers_to_process, 1):
                 try:
+                    # 제외 키워드 필터링 (먼저 수행)
+                    retailer_sku_name = self.safe_extract(item, 'retailer_sku_name') or ''
+                    if self.excluded_keywords and any(keyword.lower() in retailer_sku_name.lower() for keyword in self.excluded_keywords):
+                        print(f"[SKIP] 제외 키워드 포함: {retailer_sku_name[:40]}...")
+                        continue
+
                     self.current_rank += 1
 
                     product_url_raw = self.safe_extract(item, 'product_url')
@@ -119,7 +128,7 @@ class BestBuyTrendCrawler(BaseCrawler):
                     product_data = {
                         'account_name': self.account_name,
                         'page_type': self.page_type,
-                        'retailer_sku_name': self.safe_extract(item, 'retailer_sku_name'),
+                        'retailer_sku_name': retailer_sku_name,
                         'final_sku_price': self.safe_extract(item, 'final_sku_price'),
                         'savings': savings,
                         'comparable_pricing': self.safe_extract(item, 'comparable_pricing'),

@@ -72,6 +72,9 @@ class WalmartBSRCrawler(BaseCrawler):
         # 캐시 기반 중복 관리
         self.db_urls = set()       # DB에 저장된 URL (Main에서 저장)
         self.crawled_urls = set()  # BSR에서 수집한 URL (페이지 간 중복 방지)
+        self.excluded_keywords = [
+            'Screen Magnifier', 'mount', 'holder', 'cable', 'adapter', 'stand', 'wallet'
+        ]  # 제외할 키워드 리스트 (retailer_sku_name에 포함 시 수집 제외)
 
     def format_walmart_price(self, price_result):
         """Walmart 가격 결과를 $XX.XX 형식으로 변환"""
@@ -486,6 +489,13 @@ class WalmartBSRCrawler(BaseCrawler):
             """
 
             for product in products:
+                retailer_sku_name = product.get('retailer_sku_name') or ''
+
+                # 제외 키워드 필터링 (먼저 수행)
+                if self.excluded_keywords and any(keyword.lower() in retailer_sku_name.lower() for keyword in self.excluded_keywords):
+                    print(f"[SKIP] 제외 키워드 포함: {retailer_sku_name[:40]}...")
+                    continue
+
                 product_url = product.get('product_url')
                 if not product_url:
                     continue
