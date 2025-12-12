@@ -36,7 +36,9 @@ import sys
 import os
 import argparse
 import traceback
+import time
 from datetime import datetime
+import pytz
 
 # 공통 환경 설정 (작업 디렉토리, 한글 출력, 경로 설정)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,6 +49,7 @@ from walmart.wmart_hhp_main import WalmartMainCrawler
 from walmart.wmart_hhp_bsr import WalmartBSRCrawler
 from walmart.wmart_hhp_dt import WalmartDetailCrawler
 from common.base_crawler import BaseCrawler
+from common.alert_hhp_monitor import send_crawl_alert
 
 
 class WalmartIntegratedCrawler:
@@ -60,14 +63,17 @@ class WalmartIntegratedCrawler:
         """
         self.account_name = 'Walmart'
         self.batch_id = batch_id
-        self.start_time = None
+        self.start_time_kst = None
+        self.start_time_server = None
         self.end_time = None
         self.resume_from = resume_from
         self.base_crawler = BaseCrawler()
+        self.korea_tz = pytz.timezone('Asia/Seoul')
 
     def run(self):
         """통합 크롤러 실행. Returns: bool"""
-        self.start_time = datetime.now()
+        self.start_time_kst = datetime.now(self.korea_tz)
+        self.start_time_server = datetime.now()
 
         # batch_id 생성 또는 재사용
         if not self.batch_id:
@@ -86,61 +92,108 @@ class WalmartIntegratedCrawler:
             print(f"resume_from: {self.resume_from}")
 
         try:
+            # 결과: {'stage': {'success': bool, 'duration': float}} 형태로 저장
             crawl_results = {'main': None, 'bsr': None, 'detail': None}
 
             # STEP 1: Main
             if not self.resume_from or self.resume_from == 'main':
                 print(f"\n[STEP 1/3] Main Crawler...")
+                stage_start = time.time()
                 try:
-                    crawl_results['main'] = WalmartMainCrawler(test_mode=False, batch_id=self.batch_id).run()
+                    success = WalmartMainCrawler(test_mode=False, batch_id=self.batch_id).run()
+                    crawl_results['main'] = {'success': success, 'duration': time.time() - stage_start}
                 except Exception as e:
                     print(f"[ERROR] Main: {e}")
                     traceback.print_exc()
-                    crawl_results['main'] = False
+                    crawl_results['main'] = {'success': False, 'duration': time.time() - stage_start}
             else:
                 crawl_results['main'] = 'skipped'
 
             # STEP 2: BSR
             if not self.resume_from or self.resume_from in ['main', 'bsr']:
                 print(f"\n[STEP 2/3] BSR Crawler...")
+                stage_start = time.time()
                 try:
-                    crawl_results['bsr'] = WalmartBSRCrawler(test_mode=False, batch_id=self.batch_id).run()
+                    success = WalmartBSRCrawler(test_mode=False, batch_id=self.batch_id).run()
+                    crawl_results['bsr'] = {'success': success, 'duration': time.time() - stage_start}
                 except Exception as e:
                     print(f"[ERROR] BSR: {e}")
                     traceback.print_exc()
-                    crawl_results['bsr'] = False
+                    crawl_results['bsr'] = {'success': False, 'duration': time.time() - stage_start}
             else:
                 crawl_results['bsr'] = 'skipped'
 
             # STEP 3: Detail
             print(f"\n[STEP 3/3] Detail Crawler...")
+            stage_start = time.time()
             try:
-                crawl_results['detail'] = WalmartDetailCrawler(batch_id=self.batch_id, test_mode=False).run()
+                success = WalmartDetailCrawler(batch_id=self.batch_id, test_mode=False).run()
+                crawl_results['detail'] = {'success': success, 'duration': time.time() - stage_start}
             except Exception as e:
                 print(f"[ERROR] Detail: {e}")
                 traceback.print_exc()
-                crawl_results['detail'] = False
+                crawl_results['detail'] = {'success': False, 'duration': time.time() - stage_start}
 
             # 결과 출력
             self.end_time = datetime.now()
-            elapsed = (self.end_time - self.start_time).total_seconds()
+            elapsed = (self.end_time - self.start_time_server).total_seconds()
 
             print("\n" + "="*60)
             print(f"완료 ({elapsed/60:.1f}분)")
             for step, result in crawl_results.items():
-                status = "SKIP" if result == 'skipped' else "OK" if result else "FAIL"
+                if result == 'skipped':
+                    status = "SKIP"
+                elif isinstance(result, dict):
+                    status = "OK" if result.get('success') else "FAIL"
+                else:
+                    status = "FAIL"
                 print(f"  {step}: {status}")
             print("="*60)
+
+            # 이메일 알림 발송
+            failed_stages = [
+                k for k, v in crawl_results.items()
+                if isinstance(v, dict) and v.get('success') is False
+            ]
+            send_crawl_alert(
+                retailer='USA Walmart HHP',
+                results=crawl_results,
+                failed_stages=failed_stages,
+                elapsed_time=elapsed,
+                resume_from=self.resume_from,
+                test_mode=False,
+                start_time_kst=self.start_time_kst,
+                start_time_server=self.start_time_server
+            )
 
             # 로깅 종료
             self.base_crawler.stop_logging()
 
-            success_count = sum(1 for r in crawl_results.values() if r is True)
+            success_count = sum(
+                1 for r in crawl_results.values()
+                if isinstance(r, dict) and r.get('success') is True
+            )
             return success_count > 0
 
         except Exception as e:
             print(f"\n[ERROR] Integrated crawler failed: {e}")
             traceback.print_exc()
+
+            # 예외 발생 시에도 이메일 알림 발송
+            self.end_time = datetime.now()
+            elapsed = (self.end_time - self.start_time_server).total_seconds() if self.start_time_server else 0
+            send_crawl_alert(
+                retailer='USA Walmart HHP',
+                results=crawl_results,
+                failed_stages=['Fatal error'],
+                elapsed_time=elapsed,
+                error_message=str(e),
+                resume_from=self.resume_from,
+                test_mode=False,
+                start_time_kst=self.start_time_kst,
+                start_time_server=self.start_time_server
+            )
+
             # 예외 발생 시에도 로깅 종료
             self.base_crawler.stop_logging()
             return False
