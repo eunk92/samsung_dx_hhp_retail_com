@@ -765,6 +765,11 @@ class AmazonDetailCrawler(BaseCrawler):
 
             # 리뷰 섹션으로 이동
             summarized_review_content = None
+            is_no_reviews = False
+            count_of_reviews = None
+            star_rating = None
+            count_of_star_ratings = None
+            detailed_review_content = None
             try:
                 self.driver.execute_script("window.scrollTo(0, 0);")
                 time.sleep(0.5)
