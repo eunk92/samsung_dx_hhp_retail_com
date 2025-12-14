@@ -255,9 +255,9 @@ class DatabaseManager:
         insert_query = f"""
             INSERT INTO {self.table_name} (
                 country, samsung_series_name, comp_brand, comp_series_name,
-                expected_release, comment, calender_week, created_at, batch_id, response_json
+                expected_release, release_status, comment, calender_week, created_at, batch_id, response_json
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         try:
             # response_json을 JSON 문자열로 변환
@@ -274,6 +274,7 @@ class DatabaseManager:
                 result['comp_brand'],
                 result['comp_sku_name'],
                 result.get('expected_release', ''),
+                result.get('release_status', 'info_not_available'),
                 result.get('comment', ''),
                 calendar_week,
                 result.get('created_at'),
@@ -386,7 +387,7 @@ class OpenAIClient:
         return prompt
 
     def analyze(self, category, samsung_product, competitor_brands, batch_id=None, dry_run=False):
-        """OpenAI API 호출하여 경쟁제품 분석 (Samsung 1개 vs 경쟁사 N개)"""
+        """OpenAI Responses API로 경쟁제품 분석 (웹 검색 활성화)"""
         prompt = self.generate_prompt(category, samsung_product, competitor_brands)
 
         if not prompt:
@@ -397,33 +398,35 @@ class OpenAIClient:
                 'error': '템플릿 로드 실패'
             }
 
+        # 웹 검색용 프롬프트에 JSON 출력 지시 추가
+        web_prompt = f"""You are a market analyst specializing in consumer electronics.
+Use web search to find the latest information about competitor products.
+Always respond with valid JSON format only, no additional text.
+
+{prompt}"""
+
         try:
-            response = self.client.chat.completions.create(
+            response = self.client.responses.create(
                 model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a market analyst specializing in consumer electronics. Provide accurate, factual information about competitor products. Always respond with valid JSON format."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0,
-                max_tokens=2000,
-                response_format={"type": "json_object"}
+                tools=[{"type": "web_search_preview"}],
+                input=web_prompt,
+                temperature=0
             )
 
-            response_text = response.choices[0].message.content
+            response_text = response.output_text
             response_time = datetime.now()
             tokens_used = response.usage.total_tokens if response.usage else 0
-            prompt_tokens = response.usage.prompt_tokens if response.usage else 0
-            completion_tokens = response.usage.completion_tokens if response.usage else 0
-            cost_usd = self.calculate_cost(prompt_tokens, completion_tokens)
+            input_tokens = response.usage.input_tokens if response.usage else 0
+            output_tokens = response.usage.output_tokens if response.usage else 0
+            cost_usd = self.calculate_cost(input_tokens, output_tokens)
 
-            # JSON 파싱 검증
+            # JSON 파싱 검증 및 추출
             try:
+                # 응답에서 JSON 부분만 추출 (웹 검색 결과에 추가 텍스트가 있을 수 있음)
+                json_start = response_text.find('{')
+                json_end = response_text.rfind('}') + 1
+                if json_start != -1 and json_end > json_start:
+                    response_text = response_text[json_start:json_end]
                 json.loads(response_text)
             except json.JSONDecodeError:
                 print_log("WARNING", "응답이 유효한 JSON이 아닙니다. 원본 텍스트 저장")
@@ -441,7 +444,7 @@ class OpenAIClient:
             }
 
         except Exception as e:
-            print_log("ERROR", f"OpenAI API 호출 실패: {e}")
+            print_log("ERROR", f"OpenAI Responses API 호출 실패: {e}")
 
             # 에러 시에도 저장 (DRY RUN이 아닐 때만)
             if not dry_run:
@@ -535,6 +538,7 @@ class CompetitorAnalyzer:
                                 'comp_brand': comp.get('brand', competitor_brand),
                                 'comp_sku_name': comp.get('comp_sku_name', 'info_not_available'),
                                 'expected_release': comp.get('expected_release', ''),
+                                'release_status': comp.get('release_status', 'info_not_available'),
                                 'comment': comp.get('comment', ''),
                                 'product_line': product_line,
                                 'response_json': result['response'],
@@ -554,6 +558,7 @@ class CompetitorAnalyzer:
                     'comp_brand': competitor_brand,
                     'comp_sku_name': 'info_not_available',
                     'expected_release': '',
+                    'release_status': 'info_not_available',
                     'comment': '',
                     'product_line': product_line,
                     'response_json': result['response'],
@@ -568,6 +573,7 @@ class CompetitorAnalyzer:
                     'comp_brand': competitor_brand,
                     'comp_sku_name': 'info_not_available',
                     'expected_release': '',
+                    'release_status': 'info_not_available',
                     'comment': '',
                     'product_line': product_line,
                     'response_json': None,
@@ -582,6 +588,7 @@ class CompetitorAnalyzer:
                 'comp_brand': competitor_brand,
                 'comp_sku_name': 'info_not_available',
                 'expected_release': '',
+                'release_status': 'info_not_available',
                 'comment': '',
                 'product_line': product_line,
                 'response_json': None,
@@ -709,6 +716,7 @@ class CompetitorAnalyzer:
         print(f"Market Competitor Analyzer ({mode_str}){dry_run_str}")
         print(f"배치 ID: {self.batch_id}")
         print(f"저장 테이블: {self.db.table_name}")
+        print("*** Responses API + web_search_preview 사용 ***")
         if self.dry_run:
             print("*** DRY RUN 모드: OpenAI 응답만 로그에 출력, DB 저장 안함 ***")
         print(f"로그 파일: {log_file}")
@@ -850,7 +858,7 @@ class EventDateAnalyzer:
         return prompt
 
     def analyze_event(self, product_name):
-        """OpenAI API 호출하여 이벤트 날짜 분석"""
+        """OpenAI Responses API로 이벤트 날짜 분석 (웹 검색 활성화)"""
         prompt = self.generate_event_prompt(product_name)
 
         if not prompt:
@@ -860,30 +868,37 @@ class EventDateAnalyzer:
                 'error': '템플릿 로드 실패'
             }
 
+        # 웹 검색용 프롬프트에 JSON 출력 지시 추가
+        web_prompt = f"""You are a product launch analyst specializing in consumer electronics.
+Use web search to find the latest information about product launch dates and pre-order schedules for the North American market.
+Always respond with valid JSON format only, no additional text.
+
+{prompt}"""
+
         try:
-            response = self.openai.client.chat.completions.create(
+            response = self.openai.client.responses.create(
                 model=self.openai.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a product launch analyst. Provide accurate, factual information about product launch dates and pre-order schedules for the North American market. Always respond with valid JSON format."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0,
-                max_tokens=1000,
-                response_format={"type": "json_object"}
+                tools=[{"type": "web_search_preview"}],
+                input=web_prompt,
+                temperature=0
             )
 
-            response_text = response.choices[0].message.content
+            response_text = response.output_text
             response_time = datetime.now()
             tokens_used = response.usage.total_tokens if response.usage else 0
-            prompt_tokens = response.usage.prompt_tokens if response.usage else 0
-            completion_tokens = response.usage.completion_tokens if response.usage else 0
-            cost_usd = self.openai.calculate_cost(prompt_tokens, completion_tokens)
+            input_tokens = response.usage.input_tokens if response.usage else 0
+            output_tokens = response.usage.output_tokens if response.usage else 0
+            cost_usd = self.openai.calculate_cost(input_tokens, output_tokens)
+
+            # JSON 파싱 검증 및 추출
+            try:
+                json_start = response_text.find('{')
+                json_end = response_text.rfind('}') + 1
+                if json_start != -1 and json_end > json_start:
+                    response_text = response_text[json_start:json_end]
+                json.loads(response_text)
+            except json.JSONDecodeError:
+                print_log("WARNING", "응답이 유효한 JSON이 아닙니다. 원본 텍스트 저장")
 
             # 요청/응답 저장 (DRY RUN이 아닐 때만)
             if not self.dry_run:
@@ -898,7 +913,7 @@ class EventDateAnalyzer:
             }
 
         except Exception as e:
-            print_log("ERROR", f"OpenAI API 호출 실패: {e}")
+            print_log("ERROR", f"OpenAI Responses API 호출 실패: {e}")
 
             # 에러 시에도 저장 (DRY RUN이 아닐 때만)
             if not self.dry_run:
