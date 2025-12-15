@@ -104,9 +104,9 @@ class AmazonDetailCrawler(BaseCrawler):
             print(f"[ERROR] Initialize failed: XPath load failed (account={self.account_name}, page_type={self.page_type})")
             return False
 
-        # 4. WebDriver 설정
+        # 4. WebDriver 설정 (강화된 봇 감지 회피)
         try:
-            self.setup_driver()
+            self.setup_driver_stealth(self.account_name)
         except Exception as e:
             print(f"[ERROR] Initialize failed: WebDriver setup failed - {e}")
             traceback.print_exc()
@@ -260,7 +260,7 @@ class AmazonDetailCrawler(BaseCrawler):
             time.sleep(random.uniform(10, 15))
 
             print("[INFO] Starting new browser...")
-            self.setup_driver()
+            self.setup_driver_stealth(self.account_name)
 
             # 쿠키 재로드
             if self.login_success is not False:
@@ -489,14 +489,14 @@ class AmazonDetailCrawler(BaseCrawler):
             # Sorry/Robot check 페이지 감지 및 처리
             if not self.check_and_handle_sorry_page():
                 print(f"[WARNING] Sorry/Robot page could not be resolved")
-                return {'review_count': 0, 'reviews': data_extractor.get_no_reviews_text(self.account_name)}
+                return {'review_count': None, 'reviews': None, 'star_rating': None, 'star_rating_count': None}
 
             page_html = self.driver.page_source
             tree = html.fromstring(page_html)
 
             page_html_lower = page_html.lower()
             if "couldn't find that page" in page_html_lower or "page not found" in page_html_lower:
-                return {'review_count': 0, 'reviews': None}
+                return {'review_count': None, 'reviews': None, 'star_rating': None, 'star_rating_count': None}
 
             review_url = f"https://www.amazon.com/product-reviews/{item}/ref=cm_cr_dp_d_show_all_btm?ie=UTF8&reviewerType=all_reviews"
             current_url = self.driver.current_url
@@ -507,9 +507,9 @@ class AmazonDetailCrawler(BaseCrawler):
                     page_html = self.driver.page_source
                     tree = html.fromstring(page_html)
                     if 'signin' in self.driver.current_url:
-                        return {'review_count': 0, 'reviews': data_extractor.get_no_reviews_text(self.account_name)}
+                        return {'review_count': None, 'reviews': None, 'star_rating': None, 'star_rating_count': None}
                 else:
-                    return {'review_count': 0, 'reviews': data_extractor.get_no_reviews_text(self.account_name)}
+                    return {'review_count': None, 'reviews': None, 'star_rating': None, 'star_rating_count': None}
 
             review_count = None
             try:
@@ -525,6 +525,10 @@ class AmazonDetailCrawler(BaseCrawler):
             except Exception:
                 pass
 
+            # 리뷰 페이지에서 별점/별점수 추출 (상세페이지에서 추출 실패 시 사용)
+            review_page_star_rating = self.extract_rating(self.safe_extract(tree, 'review_page_star_rating'))
+            review_page_star_rating_count = self.extract_review_count(self.safe_extract(tree, 'review_page_star_rating_count'))
+
             review_container_xpath = self.xpaths.get('review_page_container', {}).get('xpath')
             review_content_xpath = self.xpaths.get('review_page_content', {}).get('xpath')
             next_page_xpath = self.xpaths.get('review_page_next_button', {}).get('xpath')
@@ -536,7 +540,12 @@ class AmazonDetailCrawler(BaseCrawler):
                 review_containers = tree.xpath(review_container_xpath)
                 if not review_containers:
                     if page_num == 1:
-                        return {'review_count': review_count, 'reviews': data_extractor.get_no_reviews_text(self.account_name)}
+                        return {
+                            'review_count': review_count,
+                            'reviews': data_extractor.get_no_reviews_text(self.account_name),
+                            'star_rating': review_page_star_rating,
+                            'star_rating_count': review_page_star_rating_count
+                        }
                     break
 
                 for container in review_containers:
@@ -570,15 +579,25 @@ class AmazonDetailCrawler(BaseCrawler):
                     break
 
             if not cleaned_reviews:
-                return {'review_count': review_count, 'reviews': data_extractor.get_no_reviews_text(self.account_name)}
+                return {
+                    'review_count': review_count,
+                    'reviews': data_extractor.get_no_reviews_text(self.account_name),
+                    'star_rating': review_page_star_rating,
+                    'star_rating_count': review_page_star_rating_count
+                }
             numbered_reviews = [f"review{i} - {review}" for i, review in enumerate(cleaned_reviews, 1)]
             result = ' ||| '.join(numbered_reviews)
-            return {'review_count': review_count, 'reviews': result}
+            return {
+                'review_count': review_count,
+                'reviews': result,
+                'star_rating': review_page_star_rating,
+                'star_rating_count': review_page_star_rating_count
+            }
 
         except Exception as e:
             print(f"[ERROR] Review page extraction failed: {e}")
             traceback.print_exc()
-            return {'review_count': 0, 'reviews': None}
+            return {'review_count': None, 'reviews': None, 'star_rating': None, 'star_rating_count': None}
 
     def crawl_detail(self, product):
         """상세 페이지 크롤링: 페이지 로드 → 필드 추출 → 리뷰 추출 → product_list + detail 데이터 결합"""
@@ -645,11 +664,13 @@ class AmazonDetailCrawler(BaseCrawler):
             if not final_sku_price:
                 # current_price xpath로 추출 시도
                 final_sku_price = self.safe_extract(tree, 'final_sku_price')
+                if not final_sku_price:
+                    final_sku_price = self.safe_extract(tree, 'final_sku_price_fallback')
 
                 # 가격 추출 실패 시 availability_status 확인
                 if not final_sku_price:
                     # (No featured offers available)
-                    final_sku_price = self.safe_extract(tree, 'final_sku_price_nofeatured') 
+                    final_sku_price = self.safe_extract(tree, 'final_sku_price_nofeatured')
                     if not final_sku_price:
                         # (Currently unavailable)
                         final_sku_price = self.safe_extract(tree, 'final_sku_price_unavailable') 
@@ -657,6 +678,15 @@ class AmazonDetailCrawler(BaseCrawler):
                 # product에 업데이트
                 if final_sku_price:
                     product['final_sku_price'] = final_sku_price
+
+            # shipping_info (여러 요소는 쉼표로 연결)
+            shipping_info = product.get('shipping_info')
+            if not shipping_info:
+                shipping_info = self.safe_extract_join(tree, 'shipping_info', ' ')
+                if shipping_info:
+                    shipping_info = shipping_info.replace('Details', '').strip()
+                    if shipping_info:
+                        product['shipping_info'] = shipping_info
 
             # bsr인 경우
             if product.get('page_type') == 'bsr':
@@ -676,13 +706,6 @@ class AmazonDetailCrawler(BaseCrawler):
                 if original_sku_price:
                     product['original_sku_price'] = original_sku_price
 
-                # shipping_info (여러 요소는 쉼표로 연결)
-                shipping_info = self.safe_extract_join(tree, 'shipping_info', ' ')
-                if shipping_info:
-                    shipping_info = shipping_info.replace('Details', '').strip()
-                    if shipping_info:
-                        product['shipping_info'] = shipping_info
-
                 # available_quantity_for_purchase
                 available_quantity_for_purchase = self.safe_extract(tree, 'available_quantity_for_purchase')
                 if available_quantity_for_purchase:
@@ -698,7 +721,7 @@ class AmazonDetailCrawler(BaseCrawler):
             
             hhp_carrier = self.safe_extract(tree, 'hhp_carrier')
             sku_popularity = self.safe_extract(tree, 'sku_popularity')
-            bundle = self.safe_extract(tree, 'bundle')
+            bundle = self.safe_extract_join(tree, 'bundle', ' ||| ')
             retailer_membership_discounts_raw = self.safe_extract(tree, 'retailer_membership_discounts')
             retailer_membership_discounts = data_extractor.extract_text_before_or_after(
                 retailer_membership_discounts_raw, 'Join Prime', 'before'
@@ -770,6 +793,7 @@ class AmazonDetailCrawler(BaseCrawler):
             star_rating = None
             count_of_star_ratings = None
             detailed_review_content = None
+            # 리뷰 링크 클릭 시도 (실패해도 계속 진행)
             try:
                 self.driver.execute_script("window.scrollTo(0, 0);")
                 time.sleep(0.5)
@@ -781,7 +805,11 @@ class AmazonDetailCrawler(BaseCrawler):
                     )
                     review_link.click()
                     time.sleep(1)
+            except Exception:
+                print("[INFO] 리뷰 링크 버튼 없음 - 현재 페이지에서 추출 진행")
 
+            # 리뷰 필드 추출
+            try:
                 page_html = self.driver.page_source
                 tree = html.fromstring(page_html)
 
@@ -806,7 +834,6 @@ class AmazonDetailCrawler(BaseCrawler):
                             page_html = self.driver.page_source
                             tree = html.fromstring(page_html)
 
-                        # 개발 완료 후 count_of_reviews에 있는 xpath를 count_of_star_ratings로 변경 필요
                         if count_of_star_ratings is None:
                             count_of_star_ratings_raw = self.safe_extract(tree, 'count_of_star_ratings')
                             count_of_star_ratings = self.extract_review_count(count_of_star_ratings_raw)
@@ -840,6 +867,12 @@ class AmazonDetailCrawler(BaseCrawler):
                 review_result = self.extract_reviews_from_review_page(item, max_reviews=20)
                 count_of_reviews = review_result.get('review_count') if review_result else '0'
                 detailed_review_content = review_result.get('reviews') if review_result else None
+
+                # 상세페이지에서 별점/별점수 추출 실패 시 리뷰 페이지 값 사용
+                if not star_rating:
+                    star_rating = review_result.get('star_rating') if review_result else None
+                if not count_of_star_ratings:
+                    count_of_star_ratings = review_result.get('star_rating_count') if review_result else None
 
             # 결합된 데이터
             detail_data = {
