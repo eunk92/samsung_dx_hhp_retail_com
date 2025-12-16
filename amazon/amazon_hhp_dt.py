@@ -568,9 +568,9 @@ class AmazonDetailCrawler(BaseCrawler):
                     next_button = self.driver.find_element(By.XPATH, next_page_xpath)
                     if next_button:
                         self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_button)
-                        time.sleep(0.5)
+                        time.sleep(random.uniform(1, 2))
                         next_button.click()
-                        time.sleep(3)
+                        time.sleep(random.uniform(5, 10))
                         page_html = self.driver.page_source
                         tree = html.fromstring(page_html)
                     else:
@@ -825,8 +825,16 @@ class AmazonDetailCrawler(BaseCrawler):
 
                 if is_no_reviews:
                     count_of_reviews = '0'
-                    star_rating = 'No customer reviews'
-                    count_of_star_ratings = 'No customer reviews'
+                    # star_rating, count_of_star_ratings는 추출 시도 후 실패 시 'No customer reviews'
+                    count_of_star_ratings_raw = self.safe_extract(tree, 'count_of_star_ratings')
+                    count_of_star_ratings = self.extract_review_count(count_of_star_ratings_raw)
+                    if not count_of_star_ratings:
+                        count_of_star_ratings = 'No customer reviews'
+
+                    star_rating_raw = self.safe_extract(tree, 'star_rating')
+                    star_rating = self.extract_rating(star_rating_raw)
+                    if not star_rating:
+                        star_rating = 'No customer reviews'
                 else:
                     for attempt in range(1, MAX_RETRY + 1):
                         # 첫 시도는 기존 tree 사용, 재시도 시에만 재파싱
