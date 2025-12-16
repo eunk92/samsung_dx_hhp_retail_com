@@ -43,6 +43,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 
 from common.base_crawler import BaseCrawler
+from common.data_extractor import extract_numeric_value
 
 
 class WalmartMainCrawler(BaseCrawler):
@@ -733,7 +734,7 @@ class WalmartMainCrawler(BaseCrawler):
                         'delivery_availability': self.safe_extract(item, 'delivery_availability'),
                         'sku_status': sku_status,
                         'retailer_membership_discounts': retailer_membership_discounts,
-                        'available_quantity_for_purchase': self.safe_extract(item, 'available_quantity_for_purchase'),
+                        'available_quantity_for_purchase': extract_numeric_value(self.safe_extract(item, 'available_quantity_for_purchase')),
                         'inventory_status': self.safe_extract(item, 'inventory_status'),
                         'main_rank': 0,  # save_products()에서 재할당
                         'page_number': page_number,
