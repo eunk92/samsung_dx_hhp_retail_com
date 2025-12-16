@@ -527,6 +527,18 @@ class WalmartDetailCrawler(BaseCrawler):
             if not no_ratings_yet:
                 header_star_rating, header_count_of_star_ratings = self.extract_rating_from_header(tree)
 
+            # final_sku_price 추출 (DB에서 조회되지 않은 경우)
+            final_sku_price = product.get('final_sku_price')
+            if not final_sku_price:
+                final_sku_price = self.safe_extract(tree, 'final_sku_price')
+                if not final_sku_price:
+                    # 가격 추출 실패 시 not_available 확인
+                    not_available = self.safe_extract(tree, 'not_available')
+                    if not_available:
+                        final_sku_price = 'Not Available'
+                if final_sku_price:
+                    product['final_sku_price'] = final_sku_price
+
             # 추가 필드 추출
             number_of_ppl_purchased_yesterday_raw = self.safe_extract(tree, 'number_of_ppl_purchased_yesterday')
             number_of_ppl_purchased_yesterday = None
