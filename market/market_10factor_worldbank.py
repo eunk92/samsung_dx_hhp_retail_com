@@ -393,15 +393,6 @@ def collect_data_with_period(indicator_code, unit, source_name="World Bank", cou
                     'source': source_name
                 })
 
-        # 국가별 통계 출력
-        country_stats = {}
-        for row in data_rows:
-            code = row['country_code']
-            country_stats[code] = country_stats.get(code, 0) + 1
-
-        for code, count in sorted(country_stats.items()):
-            print_log("INFO", f"    {code}: {count}건")
-
     except (KeyError, ValueError, TypeError) as e:
         print_log("ERROR", f"파싱 오류: {e}")
         traceback.print_exc()
