@@ -379,6 +379,9 @@ def collect_data_with_period(indicator_code, unit, source_name="World Bank", cou
         for data_point in json_data[1]:
             if data_point['value'] is not None:
                 country_code = data_point.get('countryiso3code', '')
+                # countryiso3code가 빈 문자열이면 건너뛰기 (소득 그룹 등 제외)
+                if not country_code:
+                    continue
                 country_name = data_point['country']['value']
 
                 data_rows.append({
