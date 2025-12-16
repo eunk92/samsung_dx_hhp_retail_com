@@ -45,6 +45,11 @@ from selenium.webdriver.common.action_chains import ActionChains
 # 재시도 설정
 MAX_RETRY = 3
 
+# 리뷰 추출 방식 설정
+# 'review_page': 리뷰 상세 페이지에서 추출 (최대 20개, 페이지 이동 필요)
+# 'detail_page': 상품 페이지에서 추출 (최대 10개, 페이지 이동 없음)
+REVIEW_EXTRACT_MODE = 'detail_page'
+
 
 class AmazonDetailCrawler(BaseCrawler):
     """
@@ -825,16 +830,8 @@ class AmazonDetailCrawler(BaseCrawler):
 
                 if is_no_reviews:
                     count_of_reviews = '0'
-                    # star_rating, count_of_star_ratings는 추출 시도 후 실패 시 'No customer reviews'
-                    count_of_star_ratings_raw = self.safe_extract(tree, 'count_of_star_ratings')
-                    count_of_star_ratings = self.extract_review_count(count_of_star_ratings_raw)
-                    if not count_of_star_ratings:
-                        count_of_star_ratings = 'No customer reviews'
-
-                    star_rating_raw = self.safe_extract(tree, 'star_rating')
-                    star_rating = self.extract_rating(star_rating_raw)
-                    if not star_rating:
-                        star_rating = 'No customer reviews'
+                    count_of_star_ratings = 'No customer reviews'
+                    star_rating = 'No customer reviews'
                 else:
                     for attempt in range(1, MAX_RETRY + 1):
                         # 첫 시도는 기존 tree 사용, 재시도 시에만 재파싱
@@ -872,15 +869,22 @@ class AmazonDetailCrawler(BaseCrawler):
             if is_no_reviews:
                 detailed_review_content = 'No customer reviews'
             else:
-                review_result = self.extract_reviews_from_review_page(item, max_reviews=20)
-                count_of_reviews = review_result.get('review_count') if review_result else '0'
-                detailed_review_content = review_result.get('reviews') if review_result else None
-
-                # 상세페이지에서 별점/별점수 추출 실패 시 리뷰 페이지 값 사용
-                if not star_rating:
-                    star_rating = review_result.get('star_rating') if review_result else None
-                if not count_of_star_ratings:
-                    count_of_star_ratings = review_result.get('star_rating_count') if review_result else None
+                # 리뷰 추출 (REVIEW_EXTRACT_MODE에 따라 방식 결정)
+                if REVIEW_EXTRACT_MODE == 'review_page':
+                    # 리뷰 상세 페이지에서 추출
+                    review_result = self.extract_reviews_from_review_page(item, max_reviews=20)
+                    count_of_reviews = review_result.get('review_count') if review_result else None
+                    detailed_review_content = review_result.get('reviews') if review_result else None
+                    # 상세페이지에서 별점/별점수 추출 실패 시 리뷰 페이지 값 사용
+                    if not star_rating:
+                        star_rating = review_result.get('star_rating') if review_result else None
+                    if not count_of_star_ratings:
+                        count_of_star_ratings = review_result.get('star_rating_count') if review_result else None
+                else:
+                    # 상품 페이지에서 추출 (기본값)
+                    detailed_review_content = self.extract_reviews_from_detail_page(tree, max_reviews=10)
+                    # count_of_reviews = count_of_star_ratings (상품 페이지에서는 동일)
+                    count_of_reviews = count_of_star_ratings
 
             # 결합된 데이터
             detail_data = {
