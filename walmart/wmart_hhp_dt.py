@@ -69,6 +69,7 @@ class WalmartDetailCrawler(BaseCrawler):
             print("[INFO] undetected-chromedriver 설정 중 (TV 크롤러와 동일한 방식)...")
 
             options = uc.ChromeOptions()
+            options.page_load_strategy = 'none'  # TV 크롤러와 동일
             options.add_argument('--disable-blink-features=AutomationControlled')
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--no-sandbox')
@@ -76,6 +77,16 @@ class WalmartDetailCrawler(BaseCrawler):
             options.add_argument('--start-maximized')
             options.add_argument('--disable-infobars')
             options.add_argument('--window-size=1920,1080')
+            options.add_argument('--disable-gpu')  # TV 크롤러와 동일
+            options.add_argument('--lang=en-US,en;q=0.9')  # TV 크롤러와 동일
+
+            # TV 크롤러와 동일한 prefs 설정
+            prefs = {
+                "profile.default_content_setting_values.notifications": 2,
+                "credentials_enable_service": False,
+                "profile.password_manager_enabled": False,
+            }
+            options.add_experimental_option("prefs", prefs)
 
             self.driver = uc.Chrome(options=options, use_subprocess=True)
             self.wait = WebDriverWait(self.driver, 20)
@@ -291,12 +302,18 @@ class WalmartDetailCrawler(BaseCrawler):
         return extract_numeric_value(text, include_comma=False, include_decimal=True)
 
     def initialize_session(self):
-        """세션 초기화: walmart.com 방문 (example.com 경유 제거)"""
+        """세션 초기화: example.com → walmart.com → 검색 순차 접근 (Main 크롤러와 동일)"""
         try:
             print("[INFO] 세션 초기화 중...")
 
-            # Walmart 메인 페이지 방문 (쿠키/세션 생성)
-            print("[INFO] Walmart 메인 페이지 방문...")
+            # 1단계: 중립 사이트 방문 (브라우저 fingerprint 생성)
+            print("[INFO] Step 1/3: 중립 사이트 방문...")
+            self.driver.get('https://www.example.com')
+            time.sleep(random.uniform(2, 4))
+            self.add_random_mouse_movements()
+
+            # 2단계: Walmart 메인 페이지 방문 (쿠키/세션 생성)
+            print("[INFO] Step 2/3: Walmart 메인 페이지 방문...")
             self.driver.get('https://www.walmart.com')
             time.sleep(random.uniform(8, 12))
 
@@ -317,6 +334,63 @@ class WalmartDetailCrawler(BaseCrawler):
             # 위로 스크롤
             self.driver.execute_script("window.scrollTo(0, 0)")
             time.sleep(random.uniform(2, 3))
+
+            # 3단계: 검색창에서 검색 시도 (자연스러운 브라우징 패턴)
+            print("[INFO] Step 3/3: 검색창에서 'phone' 검색 시도...")
+            try:
+                from selenium.webdriver.common.keys import Keys
+
+                search_selectors = [
+                    "input[type='search']",
+                    "input[aria-label*='Search']",
+                    "input[placeholder*='Search']",
+                    "input[name='q']"
+                ]
+
+                search_box = None
+                for selector in search_selectors:
+                    try:
+                        search_box = self.wait.until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        )
+                        if search_box:
+                            print(f"[OK] 검색창 발견: {selector}")
+                            break
+                    except:
+                        continue
+
+                if search_box:
+                    # 검색창 클릭
+                    search_box.click()
+                    time.sleep(random.uniform(2, 3))
+
+                    # "cellphone" 타이핑 (사람처럼 천천히)
+                    for char in "cellphone":
+                        search_box.send_keys(char)
+                        time.sleep(random.uniform(0.1, 0.3))
+
+                    time.sleep(random.uniform(3, 5))
+
+                    # 검색 실행 (엔터)
+                    search_box.send_keys(Keys.ENTER)
+
+                    # 검색 결과 대기
+                    time.sleep(random.uniform(8, 12))
+
+                    # CAPTCHA 체크
+                    self.handle_captcha()
+
+                    # 자연스러운 스크롤
+                    for _ in range(2):
+                        self.driver.execute_script(f"window.scrollBy(0, {random.randint(200, 400)})")
+                        time.sleep(random.uniform(1, 2))
+
+                    print("[OK] 검색 완료")
+                else:
+                    print("[WARNING] 검색창을 찾지 못함, 검색 단계 건너뜀")
+
+            except Exception as e:
+                print(f"[WARNING] 검색 실패 (계속 진행): {e}")
 
             print("[OK] 세션 초기화 완료")
             return True
@@ -416,7 +490,7 @@ class WalmartDetailCrawler(BaseCrawler):
 
         # 5. batch_id 설정
         if not self.batch_id:
-            self.batch_id = 'w_20251205_132021'
+            self.batch_id = 't_w_20251217_080050'
 
         print(f"[INFO] Initialize completed: batch_id={self.batch_id}")
         return True
@@ -482,6 +556,16 @@ class WalmartDetailCrawler(BaseCrawler):
             if not product_url:
                 print("[WARNING] Product URL is missing")
                 return product
+
+            # Referrer 헤더 추가 (검색 결과에서 온 것처럼 위장)
+            try:
+                self.driver.execute_cdp_cmd('Network.setExtraHTTPHeaders', {
+                    'headers': {
+                        'Referer': 'https://www.walmart.com/search?q=cellphone'
+                    }
+                })
+            except Exception as e:
+                print(f"[WARNING] Referrer 설정 실패: {e}")
 
             self.driver.get(product_url)
             time.sleep(random.uniform(3, 5))

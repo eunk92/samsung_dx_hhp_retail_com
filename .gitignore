@@ -80,3 +80,6 @@ login_page_debug.html
 
 # Market XML responses
 market/xml/
+
+# Internal tools (hardcoded batch_id)
+amazon/none_field_update.py
