@@ -434,7 +434,7 @@ class TVSentimentAnalyzer:
                     r.retailer_sku_name,
                     m.sku,
                     r.detailed_review_content,
-                    r.summarized_review_content,
+                    r.top_mentions,
                     r.recommendation_intent,
                     r.star_rating,
                     r.count_of_star_ratings,
@@ -448,9 +448,7 @@ class TVSentimentAnalyzer:
                     ) AS rn
                 FROM {self.source_table} r
                 INNER JOIN {self.master_table} m ON r.item = m.item AND r.account_name = m.account_name
-                WHERE r.detailed_review_content IS NOT NULL
-                  AND r.detailed_review_content != ''
-                  AND m.sku IS NOT NULL
+                WHERE m.sku IS NOT NULL
                   AND m.sku != ''
                   AND m.sku != 'no sku'
                   AND m.sku != 'Not TV'
@@ -461,7 +459,7 @@ class TVSentimentAnalyzer:
                 retailer_sku_name,
                 sku,
                 detailed_review_content,
-                summarized_review_content,
+                top_mentions,
                 recommendation_intent,
                 star_rating,
                 count_of_star_ratings,
@@ -661,7 +659,7 @@ class HHPSentimentAnalyzer:
                     r.retailer_sku_name,
                     m.sku,
                     r.detailed_review_content,
-                    r.summarized_review_content,
+                    r.top_mentions,
                     r.recommendation_intent,
                     r.star_rating,
                     r.count_of_star_ratings,
@@ -675,9 +673,7 @@ class HHPSentimentAnalyzer:
                     ) AS rn
                 FROM {self.source_table} r
                 INNER JOIN {self.master_table} m ON r.item = m.item AND r.account_name = m.account_name
-                WHERE r.detailed_review_content IS NOT NULL
-                  AND r.detailed_review_content != ''
-                  AND m.sku IS NOT NULL
+                WHERE m.sku IS NOT NULL
                   AND m.sku != ''
                   AND {date_condition}
             )
@@ -686,7 +682,7 @@ class HHPSentimentAnalyzer:
                 retailer_sku_name,
                 sku,
                 detailed_review_content,
-                summarized_review_content,
+                top_mentions,
                 recommendation_intent,
                 star_rating,
                 count_of_star_ratings,
