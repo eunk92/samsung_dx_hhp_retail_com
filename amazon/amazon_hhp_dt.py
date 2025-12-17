@@ -862,7 +862,11 @@ class AmazonDetailCrawler(BaseCrawler):
                                 print(f"[WARNING] 리뷰 데이터 추출 실패 (시도 {attempt}/{MAX_RETRY}) - 미추출: {', '.join(missing)}")
 
                 summarized_review_content = self.safe_extract(tree, 'summarized_review_content')
-            except Exception:
+                if not summarized_review_content:
+                    summarized_review_content = self.safe_extract(tree, 'summarized_review_content_fallback')
+                    
+            except Exception as e:
+                print(f"[DEBUG] 리뷰 추출 예외: {e}")
                 pass
 
             # 상세 리뷰 추출 (리뷰 없으면 건너뜀)
