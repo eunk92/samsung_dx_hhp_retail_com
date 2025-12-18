@@ -419,7 +419,7 @@ class TVSentimentAnalyzer:
         self.db.disconnect()
 
     def get_review_data(self):
-        """TV 리뷰 데이터 조회"""
+        """TV 리뷰 데이터 조회 - 해당 날짜의 전체 레코드"""
         if self.target_date:
             date_condition = f"DATE(r.crawl_datetime) = '{self.target_date}'"
             print_log("INFO", f"[TV] 조회 날짜: {self.target_date} (지정)")
@@ -428,45 +428,24 @@ class TVSentimentAnalyzer:
             print_log("INFO", "[TV] 조회 날짜: 어제 (기본값)")
 
         query = f"""
-            WITH latest_data AS (
-                SELECT
-                    r.id,
-                    r.retailer_sku_name,
-                    m.sku,
-                    r.detailed_review_content,
-                    r.top_mentions,
-                    r.recommendation_intent,
-                    r.star_rating,
-                    r.count_of_star_ratings,
-                    r.bsr_rank,
-                    r.item,
-                    r.account_name,
-                    r.crawl_datetime,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY r.item, r.account_name
-                        ORDER BY r.crawl_datetime DESC
-                    ) AS rn
-                FROM {self.source_table} r
-                INNER JOIN {self.master_table} m ON r.item = m.item AND r.account_name = m.account_name
-                WHERE m.sku IS NOT NULL
-                  AND m.sku != ''
-                  AND m.sku != 'no sku'
-                  AND m.sku != 'Not TV'
-                  AND {date_condition}
-            )
             SELECT
-                id,
-                retailer_sku_name,
-                sku,
-                detailed_review_content,
-                top_mentions,
-                recommendation_intent,
-                star_rating,
-                count_of_star_ratings,
-                bsr_rank
-            FROM latest_data
-            WHERE rn = 1
-            ORDER BY account_name, id
+                r.id,
+                r.retailer_sku_name,
+                m.sku,
+                r.detailed_review_content,
+                r.top_mentions,
+                r.recommendation_intent,
+                r.star_rating,
+                r.count_of_star_ratings,
+                r.bsr_rank
+            FROM {self.source_table} r
+            INNER JOIN {self.master_table} m ON r.item = m.item AND r.account_name = m.account_name
+            WHERE m.sku IS NOT NULL
+              AND m.sku != ''
+              AND m.sku != 'no sku'
+              AND m.sku != 'Not TV'
+              AND {date_condition}
+            ORDER BY r.account_name, r.id
         """
 
         if self.limit:
@@ -644,7 +623,7 @@ class HHPSentimentAnalyzer:
         self.db.disconnect()
 
     def get_review_data(self):
-        """HHP 리뷰 데이터 조회"""
+        """HHP 리뷰 데이터 조회 - 해당 날짜의 전체 레코드"""
         if self.target_date:
             date_condition = f"DATE(r.crawl_strdatetime) = '{self.target_date}'"
             print_log("INFO", f"[HHP] 조회 날짜: {self.target_date} (지정)")
@@ -653,43 +632,22 @@ class HHPSentimentAnalyzer:
             print_log("INFO", "[HHP] 조회 날짜: 어제 (기본값)")
 
         query = f"""
-            WITH latest_data AS (
-                SELECT
-                    r.id,
-                    r.retailer_sku_name,
-                    m.sku,
-                    r.detailed_review_content,
-                    r.top_mentions,
-                    r.recommendation_intent,
-                    r.star_rating,
-                    r.count_of_star_ratings,
-                    r.bsr_rank,
-                    r.item,
-                    r.account_name,
-                    r.crawl_strdatetime,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY r.item, r.account_name
-                        ORDER BY r.crawl_strdatetime DESC
-                    ) AS rn
-                FROM {self.source_table} r
-                INNER JOIN {self.master_table} m ON r.item = m.item AND r.account_name = m.account_name
-                WHERE m.sku IS NOT NULL
-                  AND m.sku != ''
-                  AND {date_condition}
-            )
             SELECT
-                id,
-                retailer_sku_name,
-                sku,
-                detailed_review_content,
-                top_mentions,
-                recommendation_intent,
-                star_rating,
-                count_of_star_ratings,
-                bsr_rank
-            FROM latest_data
-            WHERE rn = 1
-            ORDER BY account_name, id
+                r.id,
+                r.retailer_sku_name,
+                m.sku,
+                r.detailed_review_content,
+                r.top_mentions,
+                r.recommendation_intent,
+                r.star_rating,
+                r.count_of_star_ratings,
+                r.bsr_rank
+            FROM {self.source_table} r
+            INNER JOIN {self.master_table} m ON r.item = m.item AND r.account_name = m.account_name
+            WHERE m.sku IS NOT NULL
+              AND m.sku != ''
+              AND {date_condition}
+            ORDER BY r.account_name, r.id
         """
 
         if self.limit:
