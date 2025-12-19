@@ -5,10 +5,18 @@ OpenAI API를 활용한 경쟁사 제품 분석 크롤러
 키워드 기반 경쟁제품 매칭 및 분석 결과 DB 저장
 
 ================================================================================
-실행 모드
+스케줄 기반 실행 (운영 모드)
 ================================================================================
-- 운영 모드: 10초 내 입력 없으면 자동 실행 (market_comp_product 테이블에 저장)
-- 테스트 모드: 't' 입력 시 실행 (test_market_comp_product 테이블에 저장)
+- 경쟁 신제품 추출: 분기 첫날 (1/1, 4/1, 7/1, 10/1)에만 실행
+- 이벤트 일정 추출: 매월 첫번째 월요일에만 실행
+- 분기 첫날이 첫번째 월요일인 경우: 둘 다 실행
+- 조건 미충족 시: 로그 없이 종료
+
+================================================================================
+테스트/DRY RUN 모드
+================================================================================
+- 't' 입력: 테스트 모드 (test_market_comp_product/event 테이블)
+- 'd' 입력: DRY RUN 모드 (OpenAI 응답만 로그에 출력, DB 저장 안함)
 
 ================================================================================
 필요 패키지
@@ -133,6 +141,23 @@ def get_input_with_timeout(prompt, timeout=10):
                 print(char, end='', flush=True)
 
         time.sleep(0.1)
+
+
+# ============================================================================
+# 스케줄 체크 함수
+# ============================================================================
+
+def is_quarter_first_day():
+    """분기 첫날인지 확인 (1/1, 4/1, 7/1, 10/1)"""
+    today = datetime.now()
+    return today.day == 1 and today.month in [1, 4, 7, 10]
+
+
+def is_first_monday_of_month():
+    """이번 달 첫번째 월요일인지 확인"""
+    today = datetime.now()
+    # 월요일(weekday=0)이고 7일 이하면 첫번째 월요일
+    return today.weekday() == 0 and today.day <= 7
 
 
 # ============================================================================
@@ -706,9 +731,6 @@ class CompetitorAnalyzer:
 
     def run(self):
         """메인 실행"""
-        log_file = setup_logger()
-        cleanup_old_logs()
-
         mode_str = "테스트 모드" if self.test_mode else "운영 모드"
         dry_run_str = " [DRY RUN - DB 저장 안함]" if self.dry_run else ""
 
@@ -719,7 +741,8 @@ class CompetitorAnalyzer:
         print("*** Responses API + web_search_preview 사용 ***")
         if self.dry_run:
             print("*** DRY RUN 모드: OpenAI 응답만 로그에 출력, DB 저장 안함 ***")
-        print(f"로그 파일: {log_file}")
+        if LOG_FILE:
+            print(f"로그 파일: {LOG_FILE}")
         print("=" * 60)
 
         try:
@@ -827,20 +850,27 @@ class EventDateAnalyzer:
         self.db.disconnect()
 
     def get_competitor_products(self):
-        """market_comp_product 테이블에서 경쟁제품 조회 (brand, product_name 튜플)"""
+        """market_comp_product 테이블에서 경쟁제품 조회 (brand, product_name 튜플)
+
+        - source_batch_id가 지정되면 해당 배치만 조회
+        - source_batch_id가 None이면 MAX(batch_id) 사용 (최신 배치)
+        """
+        # source_batch_id가 지정되면 해당 배치, 아니면 최신 배치 사용
+        if self.source_batch_id:
+            batch_condition = "batch_id = %s"
+            params = [self.source_batch_id]
+        else:
+            batch_condition = f"batch_id = (SELECT MAX(batch_id) FROM {self.db.table_name})"
+            params = []
+
         query = f"""
             SELECT DISTINCT comp_brand, comp_series_name
             FROM {self.db.table_name}
-            WHERE comp_series_name IS NOT NULL
+            WHERE {batch_condition}
+              AND comp_series_name IS NOT NULL
               AND comp_series_name != ''
               AND comp_series_name != 'info_not_available'
         """
-        params = []
-
-        # source_batch_id가 있으면 해당 배치 결과만 조회
-        if self.source_batch_id:
-            query += " AND batch_id = %s"
-            params.append(self.source_batch_id)
 
         if self.limit:
             query += f" LIMIT {self.limit}"
@@ -981,9 +1011,6 @@ Always respond with valid JSON format only, no additional text.
         Args:
             products_from_memory: DRY RUN 모드에서 메모리로 전달받은 제품 목록
         """
-        if not logger:
-            setup_logger()
-
         mode_str = "테스트 모드" if self.test_mode else "운영 모드"
         dry_run_str = " [DRY RUN]" if self.dry_run else ""
 
@@ -1084,7 +1111,7 @@ if __name__ == "__main__":
     print("\n[모드 선택]")
     print("  - 't' 입력: 테스트 모드 (test_market_comp_product/event 테이블)")
     print("  - 'd' 입력: DRY RUN 모드 (OpenAI 응답만 로그에 출력, DB 저장 안함)")
-    print("  - 10초 내 입력 없음: 운영 모드 (market_comp_product/event 테이블)")
+    print("  - 10초 내 입력 없음: 운영 모드 (스케줄 기반 자동 실행)")
     print()
 
     user_input = get_input_with_timeout("모드 선택 (t=테스트, d=DRY RUN, 10초 후 자동 운영모드): ", timeout=10)
@@ -1118,6 +1145,9 @@ if __name__ == "__main__":
         input("\n엔터키를 누르면 종료합니다...")
 
     elif user_input and user_input.lower().strip() == 't':
+        # 테스트 모드: 로거 설정 (오래된 로그 삭제 안함)
+        setup_logger()
+
         test_mode = True
         print_log("INFO", "테스트 모드로 실행합니다.")
 
@@ -1150,25 +1180,68 @@ if __name__ == "__main__":
         input("\n엔터키를 누르면 종료합니다...")
 
     else:
-        test_mode = False
-        print_log("INFO", "운영 모드로 실행합니다.")
+        # ================================================================
+        # 운영 모드: 스케줄 기반 실행
+        # ================================================================
+        # - 경쟁 신제품 추출: 분기 첫날 (1/1, 4/1, 7/1, 10/1)
+        # - 이벤트 일정 추출: 매월 첫번째 월요일
+        # - 조건 미충족 시: 로그 없이 조용히 종료
+        # ================================================================
+
+        run_competitor = is_quarter_first_day()
+        run_event = is_first_monday_of_month()
+
+        today = datetime.now()
+        today_str = today.strftime('%Y-%m-%d (%A)')
+
+        # 실행 조건 미충족 시 로그 없이 종료
+        if not run_competitor and not run_event:
+            print(f"[{today_str}] 실행 조건 미충족 - 스킵")
+            print("  - 경쟁 신제품 추출: 분기 첫날 (1/1, 4/1, 7/1, 10/1)")
+            print("  - 이벤트 일정 추출: 매월 첫번째 월요일")
+            sys.exit(0)
+
+        # 실행 조건 충족 시 로거 설정
+        setup_logger()
+        cleanup_old_logs()
+
+        print_log("INFO", f"운영 모드 - 스케줄 기반 실행 ({today_str})")
+        print_log("INFO", f"  - 경쟁 신제품 추출: {'실행' if run_competitor else '스킵'}")
+        print_log("INFO", f"  - 이벤트 일정 추출: {'실행' if run_event else '스킵'}")
 
         # 공통 배치 ID 생성
         batch_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         print_log("INFO", f"배치 ID: {batch_id}")
 
-        # 1단계: 경쟁제품 분석
-        competitor_analyzer = CompetitorAnalyzer(
-            test_mode=test_mode,
-            batch_id=batch_id
-        )
-        competitor_analyzer.run()
+        # 1단계: 경쟁 신제품 추출 (분기 첫날에만 실행)
+        if run_competitor:
+            print_log("INFO", "=" * 60)
+            print_log("INFO", "[1단계] 경쟁 신제품 추출 시작")
+            print_log("INFO", "=" * 60)
 
-        # 2단계: 이벤트 날짜 분석 (동일 batch_id 사용)
-        event_analyzer = EventDateAnalyzer(
-            test_mode=test_mode,
-            source_batch_id=batch_id,
-            batch_id=batch_id
-        )
-        event_analyzer.run()
+            competitor_analyzer = CompetitorAnalyzer(
+                test_mode=False,
+                batch_id=batch_id
+            )
+            competitor_analyzer.run()
+
+        # 2단계: 이벤트 일정 추출 (첫번째 월요일에만 실행)
+        if run_event:
+            print_log("INFO", "=" * 60)
+            print_log("INFO", "[2단계] 이벤트 일정 추출 시작")
+            print_log("INFO", "=" * 60)
+
+            # source_batch_id: 경쟁제품도 실행했으면 같은 batch_id, 아니면 None (MAX batch_id 사용)
+            source_batch_id = batch_id if run_competitor else None
+
+            event_analyzer = EventDateAnalyzer(
+                test_mode=False,
+                source_batch_id=source_batch_id,
+                batch_id=batch_id
+            )
+            event_analyzer.run()
+
+        print_log("INFO", "=" * 60)
+        print_log("INFO", "스케줄 실행 완료")
+        print_log("INFO", "=" * 60)
         # 운영모드는 자동 종료
