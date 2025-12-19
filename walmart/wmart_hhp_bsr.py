@@ -42,6 +42,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 
 from common.base_crawler import BaseCrawler
+from common.data_extractor import extract_numeric_value
 
 
 class WalmartBSRCrawler(BaseCrawler):
@@ -440,13 +441,13 @@ class WalmartBSRCrawler(BaseCrawler):
                         'retailer_sku_name': self.safe_extract(item, 'retailer_sku_name'),
                         'final_sku_price': final_sku_price,
                         'original_sku_price': self.safe_extract(item, 'original_sku_price'),
-                        'offer': self.safe_extract(item, 'offer'),
+                        'offer': extract_numeric_value(self.safe_extract(item, 'offer')),
                         'pick_up_availability': self.safe_extract(item, 'pick_up_availability'),
                         'shipping_availability': self.safe_extract(item, 'shipping_availability'),
                         'delivery_availability': self.safe_extract(item, 'delivery_availability'),
                         'sku_status': sku_status,
                         'retailer_membership_discounts': retailer_membership_discounts,
-                        'available_quantity_for_purchase': self.safe_extract(item, 'available_quantity_for_purchase'),
+                        'available_quantity_for_purchase': extract_numeric_value(self.safe_extract(item, 'available_quantity_for_purchase')),
                         'inventory_status': self.safe_extract(item, 'inventory_status'),
                         'bsr_rank': idx,  # save_products에서 중복 제거 후 재할당됨
                         'page_number': page_number,
