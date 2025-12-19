@@ -286,14 +286,28 @@ class WalmartDetailCrawler(BaseCrawler):
                 return match.group(1)
         return None
 
-    def extract_review_count(self, tree):
-        """Walmart 리뷰 개수 추출 (예: '3,572 reviews' → '3,572', '3.5K reviews' → '3.5K')"""
-        text = self.safe_extract(tree, 'count_of_reviews')
-        if text:
-            # 3.5K, 12.5K 등 K 포함 숫자 또는 3,572 등 쉼표 포함 숫자 추출
-            match = re.search(r'([\d,]+\.?\d*K?)', text, re.IGNORECASE)
-            if match:
-                return match.group(1)
+    def extract_review_count(self, tree, use_review_page_xpath=False):
+        """Walmart 리뷰 개수 추출 (예: '3,572 reviews' → '3,572', '3.5K reviews' → '3.5K')
+
+        Args:
+            tree: lxml HTML tree
+            use_review_page_xpath: True면 리뷰 페이지 전용 XPath 사용
+        """
+        if use_review_page_xpath:
+            # 리뷰 페이지 전용 XPath 사용
+            text = self.safe_extract(tree, 'count_of_reviews_review_page')
+            if text:
+                # "Showing 1-10 of 17,541 reviews" 패턴에서 "of" 뒤의 숫자 추출
+                match = re.search(r'of\s+([\d,]+)\s+reviews?', text, re.IGNORECASE)
+                if match:
+                    return match.group(1)
+        else:
+            text = self.safe_extract(tree, 'count_of_reviews')
+            if text:
+                # 3.5K, 12.5K 등 K 포함 숫자 또는 3,572 등 쉼표 포함 숫자 추출
+                match = re.search(r'([\d,]+\.?\d*K?)', text, re.IGNORECASE)
+                if match:
+                    return match.group(1)
         return None
 
     def extract_star_rating(self, tree):
@@ -841,6 +855,16 @@ class WalmartDetailCrawler(BaseCrawler):
                                     time.sleep(random.uniform(1, 3))
                                 except Exception:
                                     time.sleep(random.uniform(3, 7))
+
+                                # count_of_reviews에 K 또는 M이 포함된 경우 리뷰 페이지에서 재추출
+                                if count_of_reviews and ('K' in str(count_of_reviews).upper() or 'M' in str(count_of_reviews).upper()):
+                                    print(f"[INFO] count_of_reviews에 K/M 포함 감지: {count_of_reviews} → 재추출 시도")
+                                    review_page_html = self.driver.page_source
+                                    review_page_tree = html.fromstring(review_page_html)
+                                    review_page_count = self.extract_review_count(review_page_tree, use_review_page_xpath=True)
+                                    if review_page_count and 'K' not in str(review_page_count).upper() and 'M' not in str(review_page_count).upper():
+                                        count_of_reviews = review_page_count
+                                        print(f"[INFO] 리뷰 페이지에서 count_of_reviews 재추출 성공: {count_of_reviews}")
 
                                 all_reviews = []
                                 current_page = 1
