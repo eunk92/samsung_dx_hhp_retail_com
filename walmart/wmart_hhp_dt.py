@@ -449,10 +449,10 @@ class WalmartDetailCrawler(BaseCrawler):
             encoded_match = re.search(r'%2F(\d+)%3F', product_url)
             if encoded_match:
                 return encoded_match.group(1)
-            # URL 마지막 세그먼트에서 숫자 추출
-            last_segment = product_url.rstrip('/').split('/')[-1]
-            item_with_params = last_segment.split('?')[0]
-            number_match = re.search(r'(\d+)$', item_with_params)
+            # URL 마지막 세그먼트에서 숫자 추출 (쿼리 파라미터 제거 후)
+            url_without_params = product_url.split('?')[0]
+            last_segment = url_without_params.rstrip('/').split('/')[-1]
+            number_match = re.search(r'(\d+)$', last_segment)
             if number_match:
                 return number_match.group(1)
         except Exception as e:
