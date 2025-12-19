@@ -117,7 +117,7 @@ INDICATORS = {
         'code': 'FP.CPI.TOTL',
         'name': 'CPI',
         'unit': 'Index (2010=100)',
-        'default_period': 'all',
+        'default_period': 'last_year',
         'table': 'market_cpi',
         'test_table': 'test_market_cpi'
     },
@@ -125,7 +125,7 @@ INDICATORS = {
         'code': 'NY.GNP.PCAP.CN',
         'name': '가처분소득 (명목 LCU)',
         'unit': 'LCU per capita',
-        'default_period': 'all',
+        'default_period': 'last_year',
         'table': 'market_disposable_income_nominal',
         'test_table': 'test_market_disposable_income_nominal'
     },
@@ -133,7 +133,7 @@ INDICATORS = {
         'code': 'FS.AST.DOMS.GD.ZS',
         'name': '가계부채',
         'unit': '% of GDP',
-        'default_period': 'all',
+        'default_period': 'last_year',
         'table': 'market_household_debt',
         'test_table': 'test_market_household_debt'
     }
