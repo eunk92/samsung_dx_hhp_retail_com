@@ -435,11 +435,14 @@ class WalmartMainCrawler(BaseCrawler):
                 print("[ERROR] base_container XPath not found")
                 return []
 
+            url = self.url_template.replace('{page}', str(page_number))
+
             # 첫 페이지는 세션 초기화에서 이미 검색 결과 페이지에 있음 (URL 로드 스킵)
-            if page_number == 1:
+            skip_url_load = (page_number == 1)
+
+            if skip_url_load:
                 print(f"[INFO] Page 1: 검색 결과 페이지에서 바로 추출 시작")
             else:
-                url = self.url_template.replace('{page}', str(page_number))
                 self.driver.get(url)
                 time.sleep(random.uniform(10, 15))
                 self.add_random_mouse_movements()
@@ -460,6 +463,26 @@ class WalmartMainCrawler(BaseCrawler):
                     print(f"[WARNING] Page {page_number}: {len(base_containers)}/{expected_products} products, retrying ({attempt}/3)...")
                     self.scroll_to_bottom()
                     time.sleep(random.uniform(3, 5))
+
+            # 첫 페이지에서 50개 미달 시 URL 로드 후 재시도
+            if skip_url_load and len(base_containers) < expected_products:
+                print(f"[WARNING] Page 1: {len(base_containers)}/{expected_products} products, URL 로드 후 재시도...")
+                self.driver.get(url)
+                time.sleep(random.uniform(10, 15))
+                self.add_random_mouse_movements()
+
+                for attempt in range(1, 4):
+                    page_html = self.driver.page_source
+                    tree = html.fromstring(page_html)
+                    base_containers = tree.xpath(base_container_xpath)
+
+                    if len(base_containers) >= expected_products:
+                        break
+
+                    if attempt < 3:
+                        print(f"[WARNING] Page {page_number} (retry): {len(base_containers)}/{expected_products} products, retrying ({attempt}/3)...")
+                        self.scroll_to_bottom()
+                        time.sleep(random.uniform(3, 5))
 
             print(f"[INFO] Page {page_number}: {len(base_containers)} products found")
 
