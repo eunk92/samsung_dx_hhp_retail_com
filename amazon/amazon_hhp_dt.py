@@ -672,13 +672,16 @@ class AmazonDetailCrawler(BaseCrawler):
                 if not final_sku_price:
                     final_sku_price = self.safe_extract(tree, 'final_sku_price_fallback')
 
-                # 가격 추출 실패 시 availability_status 확인
+                # 가격 추출 실패 시 가격없는 원인 확인
                 if not final_sku_price:
                     # (No featured offers available)
                     final_sku_price = self.safe_extract(tree, 'final_sku_price_nofeatured')
                     if not final_sku_price:
                         # (Currently unavailable)
-                        final_sku_price = self.safe_extract(tree, 'final_sku_price_unavailable') 
+                        final_sku_price = self.safe_extract(tree, 'final_sku_price_unavailable')
+                        if not final_sku_price:
+                            # (See price in cart)
+                            final_sku_price = self.safe_extract(tree, 'final_sku_price_see_in_cart')
 
                 # product에 업데이트
                 if final_sku_price:
