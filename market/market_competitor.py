@@ -280,9 +280,9 @@ class DatabaseManager:
         insert_query = f"""
             INSERT INTO {self.table_name} (
                 country, samsung_series_name, comp_brand, comp_series_name,
-                expected_release, release_status, comment, calender_week, created_at, batch_id, response_json
+                expected_release, release_status, comment, calender_week, created_at, batch_id, response_json, category
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         try:
             # response_json을 JSON 문자열로 변환
@@ -304,7 +304,8 @@ class DatabaseManager:
                 calendar_week,
                 result.get('created_at'),
                 batch_id,
-                response_json
+                response_json,
+                result.get('product_line')  # 카테고리 (TV/HHP)
             ))
             self.commit()
             return True
@@ -850,7 +851,7 @@ class EventDateAnalyzer:
         self.db.disconnect()
 
     def get_competitor_products(self):
-        """market_comp_product 테이블에서 경쟁제품 조회 (brand, product_name 튜플)
+        """market_comp_product 테이블에서 경쟁제품 조회 (brand, product_name, category 튜플)
 
         - source_batch_id가 지정되면 해당 배치만 조회
         - source_batch_id가 None이면 MAX(batch_id) 사용 (최신 배치)
@@ -864,7 +865,7 @@ class EventDateAnalyzer:
             params = []
 
         query = f"""
-            SELECT DISTINCT comp_brand, comp_series_name
+            SELECT DISTINCT comp_brand, comp_series_name, category
             FROM {self.db.table_name}
             WHERE {batch_condition}
               AND comp_series_name IS NOT NULL
@@ -876,7 +877,7 @@ class EventDateAnalyzer:
             query += f" LIMIT {self.limit}"
 
         self.db.execute(query, params if params else None)
-        return [(row[0], row[1]) for row in self.db.fetchall()]
+        return [(row[0], row[1], row[2]) for row in self.db.fetchall()]
 
     def generate_event_prompt(self, product_name):
         """이벤트 날짜 분석 프롬프트 생성 (DB 템플릿 사용)"""
@@ -956,7 +957,7 @@ Always respond with valid JSON format only, no additional text.
                 'error': str(e)
             }
 
-    def save_event_result(self, result_data, calendar_week, comp_brand, response_json=None):
+    def save_event_result(self, result_data, calendar_week, comp_brand, response_json=None, category=None):
         """이벤트 분석 결과 저장"""
         # rumor_based 필드 추출
         rumor_based = result_data.get('rumor_based', {})
@@ -970,9 +971,9 @@ Always respond with valid JSON format only, no additional text.
                 country, comp_brand, comp_sku_name, comp_launch_date, comp_preorder,
                 comp_pre_order_start_date, comp_preorder_end_date,
                 rumor_release_window, rumor_preorder_window, rumor_main_sources, rumor_confidence_level,
-                calender_week, created_at, batch_id, response_json
+                calender_week, created_at, batch_id, response_json, category
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         try:
             self.db.cursor.execute(insert_query, (
@@ -990,7 +991,8 @@ Always respond with valid JSON format only, no additional text.
                 calendar_week,
                 result_data.get('created_at'),
                 self.batch_id,
-                response_json
+                response_json,
+                category  # 카테고리 (TV/HHP)
             ))
             self.db.commit()
             return True
@@ -1047,9 +1049,16 @@ Always respond with valid JSON format only, no additional text.
             total_success = 0
             total_fail = 0
 
-            for idx, (comp_brand, product_name) in enumerate(products, 1):
+            for idx, product_tuple in enumerate(products, 1):
+                # 튜플 길이에 따라 category 처리 (호환성)
+                if len(product_tuple) >= 3:
+                    comp_brand, product_name, category = product_tuple[0], product_tuple[1], product_tuple[2]
+                else:
+                    comp_brand, product_name = product_tuple[0], product_tuple[1]
+                    category = None
+
                 print(f"\n[{idx}/{len(products)}] ", end="")
-                print_log("INFO", f"이벤트 분석 중: {comp_brand} - {product_name}")
+                print_log("INFO", f"이벤트 분석 중: {comp_brand} - {product_name} ({category or 'N/A'})")
 
                 result = self.analyze_event(product_name)
 
@@ -1064,7 +1073,7 @@ Always respond with valid JSON format only, no additional text.
                             print_log("INFO", f"[DRY RUN] 응답: {result['response']}")
                             total_success += 1
                         else:
-                            if self.save_event_result(response_data, calendar_week, comp_brand, result['response']):
+                            if self.save_event_result(response_data, calendar_week, comp_brand, result['response'], category):
                                 total_success += 1
                             else:
                                 total_fail += 1
