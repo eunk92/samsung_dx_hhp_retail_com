@@ -45,6 +45,34 @@ from common.base_crawler import BaseCrawler
 from common.data_extractor import extract_numeric_value
 
 
+def normalize_walmart_url(url):
+    """
+    월마트 URL을 정규화된 상품 URL로 변환 (중복 체크용)
+
+    트래킹 URL과 일반 URL에서 동일한 상품 ID를 추출하여 정규화된 URL 반환
+    - /ip/상품명/12345?param=value → 'https://www.walmart.com/ip/12345'
+    - /sp/track?...rd=...%2Fip%2F상품명%2F12345... → 'https://www.walmart.com/ip/12345'
+
+    Returns:
+        정규화된 URL 또는 추출 실패 시 원본 URL
+    """
+    if not url:
+        return url
+
+    # 1. 일반 URL (/ip/상품명/숫자ID 패턴)
+    match = re.search(r'/ip/[^/]+/(\d+)', url)
+    if match:
+        return f"https://www.walmart.com/ip/{match.group(1)}"
+
+    # 2. 트래킹 URL (/sp/track) - rd 파라미터에서 추출 (URL 인코딩 상태)
+    if '/sp/track' in url:
+        match = re.search(r'%2Fip%2F[^%]+%2F(\d+)', url)
+        if match:
+            return f"https://www.walmart.com/ip/{match.group(1)}"
+
+    return url
+
+
 class WalmartBSRCrawler(BaseCrawler):
     """
     Walmart BSR 페이지 크롤러 (Playwright 기반)
@@ -70,12 +98,21 @@ class WalmartBSRCrawler(BaseCrawler):
         self.max_pages = 10  # 최대 페이지 수
         self.current_rank = 0
 
-        # 캐시 기반 중복 관리
-        self.db_urls = set()       # DB에 저장된 URL (Main에서 저장)
-        self.crawled_urls = set()  # BSR에서 수집한 URL (페이지 간 중복 방지)
+        # 캐시 기반 중복 관리 (정규화 URL 사용)
+        self.db_url_map = {}       # {정규화URL: 원본URL} - Main에서 저장된 URL
+        self.crawled_urls = set()  # BSR에서 수집한 정규화 URL (페이지 간 중복 방지)
         self.excluded_keywords = [
             'Screen Magnifier', 'mount', 'holder', 'cable', 'adapter', 'stand', 'wallet'
         ]  # 제외할 키워드 리스트 (retailer_sku_name에 포함 시 수집 제외)
+
+        # 통계 변수
+        self.stats = {
+            'collected': 0,         # 수집 진행한 갯수
+            'duplicates': 0,        # 중복 URL 제거 갯수
+            'keyword_filtered': 0,  # 키워드 필터링 갯수
+            'updated': 0,           # UPDATE 갯수
+            'inserted': 0           # INSERT 갯수
+        }
 
     def format_walmart_price(self, price_result):
         """Walmart 가격 결과를 $XX.XX 형식으로 변환"""
@@ -319,14 +356,14 @@ class WalmartBSRCrawler(BaseCrawler):
         self.calendar_week = self.generate_calendar_week()
         self.cleanup_old_logs()
 
-        # 8. DB에서 기존 URL 캐시 로드 (Main에서 저장된 URL)
-        self.db_urls = self.build_db_url_cache()
+        # 8. DB에서 기존 URL 캐시 로드 (Main에서 저장된 URL → 정규화 매핑)
+        self.db_url_map = self.build_db_url_cache()
 
         print(f"[INFO] Initialize completed: batch_id={self.batch_id}, calendar_week={self.calendar_week}")
         return True
 
     def build_db_url_cache(self):
-        """DB에서 현재 batch_id의 URL을 조회하여 set으로 반환"""
+        """DB에서 현재 batch_id의 URL을 조회하여 {정규화URL: 원본URL} dict로 반환"""
         try:
             cursor = self.db_conn.cursor()
             query = """
@@ -337,17 +374,19 @@ class WalmartBSRCrawler(BaseCrawler):
             rows = cursor.fetchall()
             cursor.close()
 
-            db_urls = set()
+            db_url_map = {}
             for (db_url,) in rows:
                 if db_url:
-                    db_urls.add(db_url)
+                    normalized = normalize_walmart_url(db_url)
+                    if normalized not in db_url_map:
+                        db_url_map[normalized] = db_url
 
-            print(f"[INFO] DB URL cache loaded: {len(db_urls)} URLs")
-            return db_urls
+            print(f"[INFO] DB URL cache loaded: {len(db_url_map)} URLs (normalized)")
+            return db_url_map
 
         except Exception as e:
             print(f"[WARNING] build_db_url_cache failed: {e}")
-            return set()
+            return {}
 
     def scroll_to_bottom(self):
         """스크롤: 150~300px씩 느린 점진적 스크롤 → 페이지 하단까지 진행"""
@@ -477,6 +516,9 @@ class WalmartBSRCrawler(BaseCrawler):
         if not products:
             return {'insert': 0, 'update': 0}
 
+        # 수집 갯수 통계
+        self.stats['collected'] += len(products)
+
         try:
             cursor = self.db_conn.cursor()
             insert_count = 0
@@ -495,35 +537,42 @@ class WalmartBSRCrawler(BaseCrawler):
                 # 제외 키워드 필터링 (먼저 수행)
                 if self.excluded_keywords and any(keyword.lower() in retailer_sku_name.lower() for keyword in self.excluded_keywords):
                     print(f"[SKIP] 제외 키워드 포함: {retailer_sku_name[:40]}...")
+                    self.stats['keyword_filtered'] += 1
                     continue
 
                 product_url = product.get('product_url')
                 if not product_url:
                     continue
 
-                # 이미 수집한 URL → 스킵 (페이지 간 중복)
-                if product_url in self.crawled_urls:
+                # URL 정규화
+                normalized_url = normalize_walmart_url(product_url)
+
+                # 이미 수집한 URL → 스킵 (페이지 간 중복, 정규화 URL로 체크)
+                if normalized_url in self.crawled_urls:
+                    self.stats['duplicates'] += 1
                     continue
 
-                # 수집 URL에 추가
-                self.crawled_urls.add(product_url)
+                # 수집 URL에 추가 (정규화 URL)
+                self.crawled_urls.add(normalized_url)
 
                 # bsr_rank 즉시 할당
                 self.current_rank += 1
                 product['bsr_rank'] = self.current_rank
 
-                # DB에 있으면 즉시 UPDATE
-                if product_url in self.db_urls:
+                # DB에 있으면 즉시 UPDATE (정규화 URL로 매칭, 원본 URL로 UPDATE)
+                if normalized_url in self.db_url_map:
+                    original_db_url = self.db_url_map[normalized_url]
                     try:
                         cursor.execute(update_query, (
                             product['bsr_rank'],
                             product['page_number'],
                             self.account_name,
                             product['batch_id'],
-                            product['product_url']
+                            original_db_url  # 원본 DB URL로 UPDATE
                         ))
                         self.db_conn.commit()
                         update_count += 1
+                        self.stats['updated'] += 1
                     except Exception as e:
                         print(f"[ERROR] UPDATE failed: {product_url[:50]}: {e}")
                         self.db_conn.rollback()
@@ -617,6 +666,7 @@ class WalmartBSRCrawler(BaseCrawler):
                                         self.db_conn.rollback()
 
             cursor.close()
+            self.stats['inserted'] += insert_count
             return {'insert': insert_count, 'update': update_count}
 
         except Exception as e:
@@ -666,6 +716,11 @@ class WalmartBSRCrawler(BaseCrawler):
             return False
 
         finally:
+            # 통계 출력
+            print(f"\n{'='*50}")
+            print(f"[통계] 수집: {self.stats['collected']}, 중복제거: {self.stats['duplicates']}, 키워드필터: {self.stats['keyword_filtered']}, UPDATE: {self.stats['updated']}, INSERT: {self.stats['inserted']}")
+            print(f"{'='*50}")
+
             # 브라우저 리소스 정리
             if self.driver:
                 try:

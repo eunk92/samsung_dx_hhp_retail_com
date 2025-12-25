@@ -46,6 +46,34 @@ from common.base_crawler import BaseCrawler
 from common.data_extractor import extract_numeric_value
 
 
+def normalize_walmart_url(url):
+    """
+    월마트 URL을 정규화된 상품 URL로 변환 (중복 체크용)
+
+    트래킹 URL과 일반 URL에서 동일한 상품 ID를 추출하여 정규화된 URL 반환
+    - /ip/상품명/12345?param=value → 'https://www.walmart.com/ip/12345'
+    - /sp/track?...rd=...%2Fip%2F상품명%2F12345... → 'https://www.walmart.com/ip/12345'
+
+    Returns:
+        정규화된 URL 또는 추출 실패 시 원본 URL
+    """
+    if not url:
+        return url
+
+    # 1. 일반 URL (/ip/상품명/숫자ID 패턴)
+    match = re.search(r'/ip/[^/]+/(\d+)', url)
+    if match:
+        return f"https://www.walmart.com/ip/{match.group(1)}"
+
+    # 2. 트래킹 URL (/sp/track) - rd 파라미터에서 추출 (URL 인코딩 상태)
+    if '/sp/track' in url:
+        match = re.search(r'%2Fip%2F[^%]+%2F(\d+)', url)
+        if match:
+            return f"https://www.walmart.com/ip/{match.group(1)}"
+
+    return url
+
+
 class WalmartMainCrawler(BaseCrawler):
     """
     Walmart Main 페이지 크롤러 (Playwright 기반)
@@ -75,6 +103,14 @@ class WalmartMainCrawler(BaseCrawler):
         self.excluded_keywords = [
             'Screen Magnifier', 'mount', 'holder', 'cable', 'adapter', 'stand', 'wallet'
         ]  # 제외할 키워드 리스트 (retailer_sku_name에 포함 시 수집 제외)
+
+        # 통계 변수
+        self.stats = {
+            'collected': 0,         # 수집 진행한 갯수
+            'duplicates': 0,        # 중복 URL 제거 갯수
+            'keyword_filtered': 0,  # 키워드 필터링 갯수
+            'saved': 0              # 저장 갯수
+        }
 
     def format_walmart_price(self, price_result):
         """Walmart 가격 결과를 $XX.XX 형식으로 변환"""
@@ -546,23 +582,29 @@ class WalmartMainCrawler(BaseCrawler):
         if not products:
             return 0
 
+        # 수집 갯수 통계
+        self.stats['collected'] += len(products)
+
         # 키워드 필터링, 중복 제거 및 rank 할당
         unique_products = []
         for product in products:
-            
+
             # 제외 키워드 필터링 (먼저 수행)
             retailer_sku_name = product.get('retailer_sku_name') or ''
             if self.excluded_keywords and any(keyword.lower() in retailer_sku_name.lower() for keyword in self.excluded_keywords):
                 print(f"[SKIP] 제외 키워드 포함: {retailer_sku_name[:40]}...")
+                self.stats['keyword_filtered'] += 1
                 continue
 
-            # 중복 URL 필터링
+            # 중복 URL 필터링 (정규화된 URL로 체크)
             product_url = product.get('product_url')
-            if product_url and product_url in self.saved_urls:
-                print(f"[SKIP] 중복 URL: {retailer_sku_name[:40] if retailer_sku_name else 'N/A'}...")
+            normalized_url = normalize_walmart_url(product_url)
+            if normalized_url and normalized_url in self.saved_urls:
+                print(f"[SKIP] 중복 URL({normalized_url}): {retailer_sku_name[:40] if retailer_sku_name else 'N/A'}...")
+                self.stats['duplicates'] += 1
                 continue
-            if product_url:
-                self.saved_urls.add(product_url)
+            if normalized_url:
+                self.saved_urls.add(normalized_url)
 
             # rank 할당 (중복 제거된 제품에만 순차적으로)
             self.current_rank += 1
@@ -685,6 +727,7 @@ class WalmartMainCrawler(BaseCrawler):
                     remaining = target_products - total_products
                     products_to_save = products[:remaining]
                     saved_count = self.save_products(products_to_save)
+                    self.stats['saved'] += saved_count
                     total_products += saved_count
 
                     if total_products >= target_products:
@@ -709,6 +752,11 @@ class WalmartMainCrawler(BaseCrawler):
             return False
 
         finally:
+            # 통계 출력
+            print(f"\n{'='*50}")
+            print(f"[통계] 수집: {self.stats['collected']}, 중복제거: {self.stats['duplicates']}, 키워드필터: {self.stats['keyword_filtered']}, 저장: {self.stats['saved']}")
+            print(f"{'='*50}")
+
             # 브라우저 리소스 정리
             if self.driver:
                 try:
