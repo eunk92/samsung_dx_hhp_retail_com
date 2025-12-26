@@ -463,7 +463,7 @@ class WalmartMainCrawler(BaseCrawler):
             print(f"[ERROR] Scroll failed: {e}")
             traceback.print_exc()
 
-    def crawl_page(self, page_number):
+    def crawl_page(self, page_number, force_url_load=False):
         """페이지 크롤링: 페이지 로드 → CAPTCHA 처리 → 스크롤 → HTML 파싱(50개 검증) → 제품 데이터 추출"""
         try:
             base_container_xpath = self.xpaths.get('base_container', {}).get('xpath')
@@ -474,7 +474,8 @@ class WalmartMainCrawler(BaseCrawler):
             url = self.url_template.replace('{page}', str(page_number))
 
             # 첫 페이지는 세션 초기화에서 이미 검색 결과 페이지에 있음 (URL 로드 스킵)
-            skip_url_load = (page_number == 1)
+            # force_url_load=True면 강제로 URL 접근
+            skip_url_load = (page_number == 1) and not force_url_load
 
             if skip_url_load:
                 print(f"[INFO] Page 1: 검색 결과 페이지에서 바로 추출 시작")
@@ -718,6 +719,11 @@ class WalmartMainCrawler(BaseCrawler):
 
             while total_products < target_products and page_num <= self.max_pages:
                 products = self.crawl_page(page_num)
+
+                # 첫 페이지에서 0개 발견 시 URL로 직접 접근 재시도
+                if not products and page_num == 1:
+                    print(f"[WARNING] Page 1: 0 products found, URL로 직접 접근 재시도...")
+                    products = self.crawl_page(page_num, force_url_load=True)
 
                 if not products:
                     if page_num > 1:
