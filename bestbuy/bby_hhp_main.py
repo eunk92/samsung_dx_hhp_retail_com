@@ -43,6 +43,22 @@ class BestBuyMainCrawler(BaseCrawler):
     BestBuy Main 페이지 크롤러
     """
 
+    def normalize_bestbuy_url(self, url):
+        """BestBuy URL에서 SKU ID 추출 후 표준 URL로 정규화 (중복 판별용, DB 저장은 원본 URL 사용)"""
+        if not url:
+            return None
+
+        try:
+            # /product/제품명/SKU_ID 또는 /product/제품명/SKU_ID/sku/숫자
+            match = re.search(r'/product/[^/]+/([A-Z0-9]+)', url, re.IGNORECASE)
+            if match:
+                return f"https://www.bestbuy.com/product/{match.group(1)}"
+
+            # SKU ID 추출 실패 시 원본 URL 반환
+            return url
+        except Exception:
+            return url
+
     def __init__(self, test_mode=True, batch_id=None):
         """초기화. test_mode: 테스트(True)/운영 모드(False), batch_id: 통합 크롤러에서 전달"""
         super().__init__()
@@ -258,14 +274,15 @@ class BestBuyMainCrawler(BaseCrawler):
                 print(f"[SKIP] 제외 키워드 포함: {retailer_sku_name[:40]}...")
                 continue
 
-            # 중복 URL 필터링
+            # 중복 URL 필터링 (정규화된 URL로 비교)
             product_url = product.get('product_url')
-            if product_url and product_url in self.saved_urls:
+            normalized_url = self.normalize_bestbuy_url(product_url)
+            if normalized_url and normalized_url in self.saved_urls:
                 print(f"[SKIP] 중복 URL: {retailer_sku_name[:40] if retailer_sku_name else 'N/A'}...")
                 continue
-            
-            if product_url:
-                self.saved_urls.add(product_url)
+
+            if normalized_url:
+                self.saved_urls.add(normalized_url)
 
             # rank 할당 (중복 제거된 제품에만 순차적으로)
             self.current_rank += 1

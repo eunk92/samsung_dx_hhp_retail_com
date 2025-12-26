@@ -42,6 +42,22 @@ class BestBuyBSRCrawler(BaseCrawler):
     BestBuy BSR 페이지 크롤러
     """
 
+    def normalize_bestbuy_url(self, url):
+        """BestBuy URL에서 SKU ID 추출 후 표준 URL로 정규화 (중복 판별용, DB 저장은 원본 URL 사용)"""
+        if not url:
+            return None
+
+        try:
+            # /product/제품명/SKU_ID 또는 /product/제품명/SKU_ID/sku/숫자
+            match = re.search(r'/product/[^/]+/([A-Z0-9]+)', url, re.IGNORECASE)
+            if match:
+                return f"https://www.bestbuy.com/product/{match.group(1)}"
+
+            # SKU ID 추출 실패 시 원본 URL 반환
+            return url
+        except Exception:
+            return url
+
     def __init__(self, test_mode=True, batch_id=None):
         """초기화. test_mode: 테스트(True)/운영 모드(False), batch_id: 통합 크롤러에서 전달"""
         super().__init__()
@@ -52,8 +68,8 @@ class BestBuyBSRCrawler(BaseCrawler):
         self.calendar_week = None
         self.url_template = None
         self.current_rank = 0
-        self.db_urls = set()       # DB에 저장된 URL (Main에서 저장)
-        self.crawled_urls = set()  # BSR에서 수집한 URL (페이지 간 중복 방지)
+        self.db_url_map = {}       # {정규화URL: 원본URL} - Main에서 저장된 URL
+        self.crawled_urls = set()  # BSR에서 수집한 정규화 URL (페이지 간 중복 방지)
 
         self.test_count = 1  # 테스트 모드
         self.max_products = 100  # 운영 모드
@@ -80,13 +96,13 @@ class BestBuyBSRCrawler(BaseCrawler):
         self.calendar_week = self.generate_calendar_week()
         self.cleanup_old_logs()
 
-        # DB에서 기존 URL 캐시 로드 (Main에서 저장된 URL)
-        self.db_urls = self.build_db_url_cache()
+        # DB에서 기존 URL 캐시 로드 (Main에서 저장된 URL → 정규화 매핑)
+        self.db_url_map = self.build_db_url_cache()
 
         return True
 
     def build_db_url_cache(self):
-        """DB에서 현재 batch_id의 URL을 조회하여 set으로 반환"""
+        """DB에서 현재 batch_id의 URL을 조회하여 {정규화URL: 원본URL} dict로 반환"""
         try:
             cursor = self.db_conn.cursor()
             query = """
@@ -97,17 +113,19 @@ class BestBuyBSRCrawler(BaseCrawler):
             rows = cursor.fetchall()
             cursor.close()
 
-            db_urls = set()
+            db_url_map = {}
             for (db_url,) in rows:
                 if db_url:
-                    db_urls.add(db_url)
+                    normalized = self.normalize_bestbuy_url(db_url)
+                    if normalized not in db_url_map:
+                        db_url_map[normalized] = db_url
 
-            print(f"[INFO] DB URL cache loaded: {len(db_urls)} URLs")
-            return db_urls
+            print(f"[INFO] DB URL cache loaded: {len(db_url_map)} URLs (normalized)")
+            return db_url_map
 
         except Exception as e:
             print(f"[WARNING] build_db_url_cache failed: {e}")
-            return set()
+            return {}
 
     def scroll_to_bottom(self):
         """스크롤: 205~350px씩 점진적 스크롤 → 페이지네이션 보이면 종료"""
@@ -271,7 +289,7 @@ class BestBuyBSRCrawler(BaseCrawler):
             """
 
             for product in products:
-                
+
                 # 제외 키워드 필터링 (먼저 수행)
                 retailer_sku_name = product.get('retailer_sku_name') or ''
                 if self.excluded_keywords and any(keyword.lower() in retailer_sku_name.lower() for keyword in self.excluded_keywords):
@@ -279,32 +297,32 @@ class BestBuyBSRCrawler(BaseCrawler):
                     continue
 
                 product_url = product.get('product_url')
+                normalized_url = self.normalize_bestbuy_url(product_url)
 
-                # 중복 URL 필터링 (페이지 간 중복 방지)
-                if product_url and product_url in self.crawled_urls:
+                # 1. 페이지 간 중복 체크 (이미 수집한 URL → 스킵)
+                if normalized_url in self.crawled_urls:
                     continue
-                
-                if product_url:
-                    self.crawled_urls.add(product_url)
+                self.crawled_urls.add(normalized_url)
 
                 # bsr_rank 할당
                 self.current_rank += 1
                 product['bsr_rank'] = self.current_rank
 
-                # DB에 있으면 즉시 UPDATE, 없으면 INSERT 대기열에 추가
-                if product_url and product_url in self.db_urls:
+                # 2. DB 캐시에서 기존 URL 체크 → UPDATE / INSERT 분류
+                matched_url = self.db_url_map.get(normalized_url)
+                if matched_url:
                     try:
                         cursor.execute(update_query, (
                             product['bsr_rank'],
                             product['page_number'],
                             self.account_name,
                             product['batch_id'],
-                            product['product_url']
+                            matched_url  # DB에 저장된 원본 URL 사용
                         ))
                         self.db_conn.commit()
                         update_count += 1
                     except Exception as e:
-                        print(f"[ERROR] UPDATE failed: {product_url[:50]}: {e}")
+                        print(f"[ERROR] UPDATE failed: {product_url[:50] if product_url else 'N/A'}: {e}")
                         self.db_conn.rollback()
                 else:
                     products_to_insert.append(product)
