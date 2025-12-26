@@ -78,6 +78,14 @@ class BestBuyMainCrawler(BaseCrawler):
             'Screen Magnifier', 'mount', 'holder', 'cable', 'adapter', 'stand', 'wallet'
         ]  # 제외할 키워드 리스트 (retailer_sku_name에 포함 시 수집 제외)
 
+        # 통계 변수
+        self.stats = {
+            'collected': 0,         # 수집 진행한 갯수
+            'duplicates': 0,        # 중복 URL 제거 갯수
+            'keyword_filtered': 0,  # 키워드 필터링 갯수
+            'inserted': 0           # INSERT 갯수
+        }
+
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 1개월 전 로그 정리"""
         # 1. DB 연결
@@ -264,6 +272,9 @@ class BestBuyMainCrawler(BaseCrawler):
         if not products:
             return 0
 
+        # 수집 갯수 통계
+        self.stats['collected'] += len(products)
+
         # 키워드 필터링, 중복 제거 및 rank 할당
         unique_products = []
         for product in products:
@@ -272,6 +283,7 @@ class BestBuyMainCrawler(BaseCrawler):
             retailer_sku_name = product.get('retailer_sku_name') or ''
             if self.excluded_keywords and any(keyword.lower() in retailer_sku_name.lower() for keyword in self.excluded_keywords):
                 print(f"[SKIP] 제외 키워드 포함: {retailer_sku_name[:40]}...")
+                self.stats['keyword_filtered'] += 1
                 continue
 
             # 중복 URL 필터링 (정규화된 URL로 비교)
@@ -279,6 +291,7 @@ class BestBuyMainCrawler(BaseCrawler):
             normalized_url = self.normalize_bestbuy_url(product_url)
             if normalized_url and normalized_url in self.saved_urls:
                 print(f"[SKIP] 중복 URL: {retailer_sku_name[:40] if retailer_sku_name else 'N/A'}...")
+                self.stats['duplicates'] += 1
                 continue
 
             if normalized_url:
@@ -371,6 +384,7 @@ class BestBuyMainCrawler(BaseCrawler):
                                     self.db_conn.rollback()
 
             cursor.close()
+            self.stats['inserted'] += total_saved
             return total_saved
 
         except Exception as e:
@@ -421,6 +435,11 @@ class BestBuyMainCrawler(BaseCrawler):
             return False
 
         finally:
+            # 통계 출력
+            print(f"\n{'='*50}")
+            print(f"[통계] 수집: {self.stats['collected']}, 중복제거: {self.stats['duplicates']}, 키워드필터: {self.stats['keyword_filtered']}, INSERT: {self.stats['inserted']}")
+            print(f"{'='*50}")
+
             if self.driver:
                 self.driver.quit()
             if self.db_conn:
