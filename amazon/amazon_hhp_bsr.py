@@ -60,6 +60,7 @@ class AmazonBSRCrawler(BaseCrawler):
         self.test_count = 1  # 테스트 모드
         self.max_products = 100  # 운영 모드
         self.max_pages = 2  # 최대 페이지 수
+        self.crawled_urls = set()  # 페이지 간 중복 방지용 (정규화 URL)
 
     def initialize(self):
         """초기화: DB 연결 → XPath 로드 → URL 템플릿 로드 → WebDriver 설정 → batch_id 생성 → 로그 정리"""
@@ -282,31 +283,22 @@ class AmazonBSRCrawler(BaseCrawler):
             return False
 
     def normalize_amazon_url(self, url):
-        """Amazon URL을 /dp/ASIN 기준으로 정규화 (중복 판별용)"""
+        """Amazon URL에서 ASIN 추출 후 표준 URL로 정규화 (중복 판별용, DB 저장은 원본 URL 사용)"""
         if not url:
             return None
 
         try:
-            # /dp/XXXXXXXXXX/ 이후 잘라내기
-            match = re.search(r'(https://www\.amazon\.com/[^/]+/dp/[A-Z0-9]{10})', url, re.IGNORECASE)
+            # 1. 일반 URL: /dp/ASIN
+            match = re.search(r'/dp/([A-Z0-9]{10})', url, re.IGNORECASE)
             if match:
-                return match.group(1)
+                return f"https://www.amazon.com/dp/{match.group(1)}"
 
-            # /dp/로 바로 시작하는 경우
-            match = re.search(r'(https://www\.amazon\.com/dp/[A-Z0-9]{10})', url, re.IGNORECASE)
+            # 2. URL 인코딩된 sspa URL: %2Fdp%2FASIN
+            match = re.search(r'%2Fdp%2F([A-Z0-9]{10})', url, re.IGNORECASE)
             if match:
-                return match.group(1)
+                return f"https://www.amazon.com/dp/{match.group(1)}"
 
-            # 인코딩된 URL (%2Fdp%2F) 처리
-            match = re.search(r'(https://www\.amazon\.com/[^/]+%2Fdp%2F[A-Z0-9]{10})', url, re.IGNORECASE)
-            if match:
-                return match.group(1)
-
-            # 인코딩된 URL (%2Fdp%2F) - /dp/로 바로 시작하는 경우
-            match = re.search(r'(https://www\.amazon\.com%2Fdp%2F[A-Z0-9]{10})', url, re.IGNORECASE)
-            if match:
-                return match.group(1)
-
+            # ASIN 추출 실패 시 원본 URL 반환
             return url
         except Exception:
             return url
@@ -459,8 +451,15 @@ class AmazonBSRCrawler(BaseCrawler):
             existing_urls = self.build_existing_urls_cache(self.account_name, self.batch_id)
 
             for product in products:
-                # URL 정규화하여 중복 체크 (O(1) 딕셔너리 조회)
+                # URL 정규화
                 normalized_url = self.normalize_amazon_url(product['product_url'])
+
+                # 1. 페이지 간 중복 체크 (이미 수집한 URL → 스킵)
+                if normalized_url in self.crawled_urls:
+                    continue
+                self.crawled_urls.add(normalized_url)
+
+                # 2. DB 캐시에서 기존 URL 체크 → UPDATE / INSERT 분류
                 matched_url = existing_urls.get(normalized_url)
                 if matched_url:
                     product['matched_url'] = matched_url  # DB에서 매칭된 원본 URL 저장

@@ -283,31 +283,22 @@ class AmazonMainCrawler(BaseCrawler):
             return False
 
     def normalize_amazon_url(self, url):
-        """Amazon URL을 /dp/ASIN 기준으로 정규화 (중복 판별용)"""
+        """Amazon URL에서 ASIN 추출 후 표준 URL로 정규화 (중복 판별용, DB 저장은 원본 URL 사용)"""
         if not url:
             return None
 
         try:
-            # /dp/XXXXXXXXXX/ 이후 잘라내기
-            match = re.search(r'(https://www\.amazon\.com/[^/]+/dp/[A-Z0-9]{10})', url, re.IGNORECASE)
+            # 1. 일반 URL: /dp/ASIN
+            match = re.search(r'/dp/([A-Z0-9]{10})', url, re.IGNORECASE)
             if match:
-                return match.group(1)
+                return f"https://www.amazon.com/dp/{match.group(1)}"
 
-            # /dp/로 바로 시작하는 경우
-            match = re.search(r'(https://www\.amazon\.com/dp/[A-Z0-9]{10})', url, re.IGNORECASE)
+            # 2. URL 인코딩된 sspa URL: %2Fdp%2FASIN
+            match = re.search(r'%2Fdp%2F([A-Z0-9]{10})', url, re.IGNORECASE)
             if match:
-                return match.group(1)
+                return f"https://www.amazon.com/dp/{match.group(1)}"
 
-            # 인코딩된 URL (%2Fdp%2F) 처리
-            match = re.search(r'(https://www\.amazon\.com/[^/]+%2Fdp%2F[A-Z0-9]{10})', url, re.IGNORECASE)
-            if match:
-                return match.group(1)
-
-            # 인코딩된 URL (%2Fdp%2F) - /dp/로 바로 시작하는 경우
-            match = re.search(r'(https://www\.amazon\.com%2Fdp%2F[A-Z0-9]{10})', url, re.IGNORECASE)
-            if match:
-                return match.group(1)
-
+            # ASIN 추출 실패 시 원본 URL 반환
             return url
         except Exception:
             return url
