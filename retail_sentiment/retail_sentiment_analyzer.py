@@ -485,6 +485,83 @@ class TVSentimentAnalyzer:
             print_log("ERROR", f"저장 실패: {e}")
             self.db.rollback()
 
+    def save_analysis_log_start(self):
+        """분석 시작 전 대상 스냅샷 저장"""
+        if self.dry_run:
+            print_log("INFO", "[TV] DRY RUN 모드 - 분석 로그 저장 생략")
+            return
+
+        try:
+            # 분석 날짜 결정
+            if self.target_date:
+                analysis_date = self.target_date
+            else:
+                from datetime import timedelta
+                analysis_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+            # 테스트 모드면 테스트 테이블, 아니면 운영 테이블
+            log_table = 'test_retail_sentiment_analysis_log' if self.test_mode else 'retail_sentiment_analysis_log'
+
+            # 오전/오후별, 리테일러별 대상 건수 조회 및 저장 (이력 보존을 위해 항상 INSERT)
+            query = f"""
+                INSERT INTO {log_table}
+                (category, analysis_date, period, retailer, target_count, batch_id, analysis_started_at)
+                SELECT
+                    'TV',
+                    DATE(r.crawl_datetime),
+                    CASE WHEN EXTRACT(HOUR FROM r.crawl_datetime::timestamp) < 12 THEN '오전' ELSE '오후' END,
+                    LOWER(r.account_name),
+                    COUNT(*),
+                    %s,
+                    %s
+                FROM {self.source_table} r
+                INNER JOIN {self.master_table} m ON r.item = m.item AND r.account_name = m.account_name
+                WHERE m.sku IS NOT NULL
+                  AND m.sku != ''
+                  AND m.sku != 'no sku'
+                  AND m.sku != 'Not TV'
+                  AND DATE(r.crawl_datetime) = %s
+                GROUP BY DATE(r.crawl_datetime), CASE WHEN EXTRACT(HOUR FROM r.crawl_datetime::timestamp) < 12 THEN '오전' ELSE '오후' END, LOWER(r.account_name)
+            """
+            self.db.execute(query, (self.batch_id, datetime.now(), analysis_date))
+            self.db.commit()
+            mode_str = "[TEST]" if self.test_mode else ""
+            print_log("INFO", f"[TV]{mode_str} 분석 대상 스냅샷 저장 완료 ({log_table})")
+        except Exception as e:
+            print_log("ERROR", f"[TV] 분석 로그 저장 실패: {e}")
+            self.db.rollback()
+
+    def save_analysis_log_complete(self):
+        """분석 완료 시점 업데이트"""
+        if self.dry_run:
+            return
+
+        try:
+            if self.target_date:
+                analysis_date = self.target_date
+            else:
+                from datetime import timedelta
+                analysis_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+            # 테스트 모드면 테스트 테이블, 아니면 운영 테이블
+            log_table = 'test_retail_sentiment_analysis_log' if self.test_mode else 'retail_sentiment_analysis_log'
+
+            query = f"""
+                UPDATE {log_table}
+                SET analysis_completed_at = %s
+                WHERE category = 'TV'
+                  AND analysis_date = %s
+                  AND batch_id = %s
+                  AND analysis_completed_at IS NULL
+            """
+            self.db.execute(query, (datetime.now(), analysis_date, self.batch_id))
+            self.db.commit()
+            mode_str = "[TEST]" if self.test_mode else ""
+            print_log("INFO", f"[TV]{mode_str} 분석 완료 시점 저장 완료")
+        except Exception as e:
+            print_log("ERROR", f"[TV] 분석 완료 로그 저장 실패: {e}")
+            self.db.rollback()
+
     def analyze_single(self, product_data):
         """단일 제품 감성 분석"""
         try:
@@ -540,6 +617,9 @@ class TVSentimentAnalyzer:
 
             print_log("INFO", f"[TV] 분석 대상 제품: {len(review_data)}개")
 
+            # 분석 시작 전 대상 스냅샷 저장
+            self.save_analysis_log_start()
+
             total_success = 0
             total_fail = 0
 
@@ -564,6 +644,9 @@ class TVSentimentAnalyzer:
                     total_fail += 1
 
                 time.sleep(1)
+
+            # 분석 완료 시점 저장
+            self.save_analysis_log_complete()
 
             print_log("INFO", f"{'=' * 60}")
             print_log("INFO", f"[TV] 분석 완료 - 성공: {total_success}건, 실패: {total_fail}건")
@@ -687,6 +770,81 @@ class HHPSentimentAnalyzer:
             print_log("ERROR", f"저장 실패: {e}")
             self.db.rollback()
 
+    def save_analysis_log_start(self):
+        """분석 시작 전 대상 스냅샷 저장"""
+        if self.dry_run:
+            print_log("INFO", "[HHP] DRY RUN 모드 - 분석 로그 저장 생략")
+            return
+
+        try:
+            # 분석 날짜 결정
+            if self.target_date:
+                analysis_date = self.target_date
+            else:
+                from datetime import timedelta
+                analysis_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+            # 테스트 모드면 테스트 테이블, 아니면 운영 테이블
+            log_table = 'test_retail_sentiment_analysis_log' if self.test_mode else 'retail_sentiment_analysis_log'
+
+            # 오전/오후별, 리테일러별 대상 건수 조회 및 저장 (이력 보존을 위해 항상 INSERT)
+            query = f"""
+                INSERT INTO {log_table}
+                (category, analysis_date, period, retailer, target_count, batch_id, analysis_started_at)
+                SELECT
+                    'HHP',
+                    DATE(r.crawl_strdatetime),
+                    CASE WHEN EXTRACT(HOUR FROM r.crawl_strdatetime::timestamp) < 12 THEN '오전' ELSE '오후' END,
+                    LOWER(r.account_name),
+                    COUNT(*),
+                    %s,
+                    %s
+                FROM {self.source_table} r
+                INNER JOIN {self.master_table} m ON r.item = m.item AND r.account_name = m.account_name
+                WHERE m.sku IS NOT NULL
+                  AND m.sku != ''
+                  AND DATE(r.crawl_strdatetime) = %s
+                GROUP BY DATE(r.crawl_strdatetime), CASE WHEN EXTRACT(HOUR FROM r.crawl_strdatetime::timestamp) < 12 THEN '오전' ELSE '오후' END, LOWER(r.account_name)
+            """
+            self.db.execute(query, (self.batch_id, datetime.now(), analysis_date))
+            self.db.commit()
+            mode_str = "[TEST]" if self.test_mode else ""
+            print_log("INFO", f"[HHP]{mode_str} 분석 대상 스냅샷 저장 완료 ({log_table})")
+        except Exception as e:
+            print_log("ERROR", f"[HHP] 분석 로그 저장 실패: {e}")
+            self.db.rollback()
+
+    def save_analysis_log_complete(self):
+        """분석 완료 시점 업데이트"""
+        if self.dry_run:
+            return
+
+        try:
+            if self.target_date:
+                analysis_date = self.target_date
+            else:
+                from datetime import timedelta
+                analysis_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+            # 테스트 모드면 테스트 테이블, 아니면 운영 테이블
+            log_table = 'test_retail_sentiment_analysis_log' if self.test_mode else 'retail_sentiment_analysis_log'
+
+            query = f"""
+                UPDATE {log_table}
+                SET analysis_completed_at = %s
+                WHERE category = 'HHP'
+                  AND analysis_date = %s
+                  AND batch_id = %s
+                  AND analysis_completed_at IS NULL
+            """
+            self.db.execute(query, (datetime.now(), analysis_date, self.batch_id))
+            self.db.commit()
+            mode_str = "[TEST]" if self.test_mode else ""
+            print_log("INFO", f"[HHP]{mode_str} 분석 완료 시점 저장 완료 ({log_table})")
+        except Exception as e:
+            print_log("ERROR", f"[HHP] 분석 완료 로그 저장 실패: {e}")
+            self.db.rollback()
+
     def analyze_single(self, product_data):
         """단일 제품 감성 분석"""
         try:
@@ -742,6 +900,9 @@ class HHPSentimentAnalyzer:
 
             print_log("INFO", f"[HHP] 분석 대상 제품: {len(review_data)}개")
 
+            # 분석 시작 전 대상 스냅샷 저장
+            self.save_analysis_log_start()
+
             total_success = 0
             total_fail = 0
 
@@ -766,6 +927,9 @@ class HHPSentimentAnalyzer:
                     total_fail += 1
 
                 time.sleep(1)
+
+            # 분석 완료 시점 저장
+            self.save_analysis_log_complete()
 
             print_log("INFO", f"{'=' * 60}")
             print_log("INFO", f"[HHP] 분석 완료 - 성공: {total_success}건, 실패: {total_fail}건")
